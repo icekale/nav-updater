@@ -286,4 +286,3 @@ git commit -m "docs: document meeting workbench"
 - [ ] Date-range filters operate on normalized overlapping ranges and safely omit unparseable dates.
 - [ ] Templates retain existing session/CSRF handling and work at narrow viewport widths.
 - [ ] README, migrations, tests and deployment all describe the same supported workflow.
-
