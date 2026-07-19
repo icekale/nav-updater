@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">WORKSPACE</p><h1>更新历史</h1></div><a class="primary button" href="/updates/new">新建更新</a></div>
+<table><thead><tr><th>批次</th><th>截止日</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody>
+{% for run in runs %}<tr><td>#{{ run.id }}</td><td>{{ run.cutoff_date }}</td><td><span class="status">{{ run.status }}</span></td><td>{{ run.created_at }}</td><td><a href="/updates/{{ run.id }}/preview">查看</a></td></tr>{% else %}<tr><td colspan="5" class="muted">还没有处理批次</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

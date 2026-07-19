@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">ADMIN</p><h1>账号管理</h1></div></div>
+<form class="form-panel compact" method="post" action="/admin/users"><input type="hidden" name="token" value="{{ csrf_token }}"><label>账号<input name="username" required></label><label>初始密码<input name="password" type="password" minlength="8" required></label><label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label><button class="primary" type="submit">创建账号</button></form>
+<table><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{% for item in users %}<tr><td>{{ item.username }}</td><td>{{ item.role }}</td><td>{{ '启用' if item.is_active else '停用' }}</td><td>{{ item.created_at }}</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

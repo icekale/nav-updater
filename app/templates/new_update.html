@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">NEW RUN</p><h1>新建净值更新</h1></div></div>
+<form class="form-panel" method="post" action="/updates/new" enctype="multipart/form-data">
+  <input type="hidden" name="token" value="{{ csrf_token }}">
+  <label>截止日期<input type="date" name="cutoff_date" value="{{ today }}" required><small>默认使用最近一个周五，可在提交前调整。</small></label>
+  <label>原始 Excel<input type="file" name="workbook" accept=".xlsx" required></label>
+  <label>高清净值截图<input type="file" name="images" accept="image/png,image/jpeg" multiple><small>私募/渠道产品可上传一张或多张截图。</small></label>
+  <button class="primary" type="submit">上传并生成预览</button>
+</form>
+{% endblock %}

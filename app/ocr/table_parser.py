@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -11,11 +12,20 @@ from .engine import OCRToken
 class ParsedCell:
     text: str
     confidence: float
+    left: float = 0.0
 
 
 @dataclass(frozen=True)
 class ParsedRow:
     cells: tuple[ParsedCell, ...]
+
+
+@dataclass(frozen=True)
+class OCRMetricRow:
+    product_name: str
+    product_code: str | None
+    metrics: dict[str, Decimal]
+    confidence: float
 
 
 def group_rows(tokens: Iterable[OCRToken], y_tolerance: float = 12.0) -> list[ParsedRow]:
@@ -32,7 +42,7 @@ def group_rows(tokens: Iterable[OCRToken], y_tolerance: float = 12.0) -> list[Pa
     return [
         ParsedRow(
             tuple(
-                ParsedCell(token.text, token.confidence)
+                ParsedCell(token.text, token.confidence, token.left)
                 for token in sorted(row, key=lambda item: item.left)
             )
         )
@@ -66,3 +76,81 @@ def parse_number(text: str) -> Decimal:
 
 def is_confident(confidence: float, threshold: float = 0.85) -> bool:
     return confidence >= threshold
+
+
+def _header_key(text: str) -> str | None:
+    value = text.replace(" ", "").replace("（", "(").replace("）", ")").lower()
+    if value in {"产品名称", "产品", "名称"}:
+        return "product_name"
+    if value in {"代码", "产品代码", "基金代码"}:
+        return "product_code"
+    if value.startswith("mtd"):
+        return "mtd"
+    if value.startswith("ytd"):
+        return "ytd"
+    if value.startswith("近一周"):
+        return "weekly"
+    if value.startswith("近一年") and "夏普" in value:
+        return "sharpe"
+    if value.startswith("近一年") and "回撤" in value:
+        return "max_drawdown"
+    match = re.match(r"^(2019|2020|2021|2022|2023|2024|2025)", value)
+    return f"annual_{match.group(1)}" if match else None
+
+
+def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
+    rows = group_rows(tokens)
+    header_index = -1
+    headers: dict[str, float] = {}
+    for index, row in enumerate(rows):
+        candidates = [(_header_key(cell.text), cell.left) for cell in row.cells]
+        known = [(key, left) for key, left in candidates if key]
+        if len(known) >= 2:
+            header_index = index
+            headers = dict(known)
+            break
+    if header_index < 0:
+        return []
+    results: list[OCRMetricRow] = []
+    for row in rows[header_index + 1 :]:
+        if not row.cells:
+            continue
+        product_cell = _nearest_cell(row.cells, headers.get("product_name", row.cells[0].left))
+        if not product_cell or _header_key(product_cell.text):
+            continue
+        code_cell = (
+            _nearest_cell(row.cells, headers["product_code"]) if "product_code" in headers else None
+        )
+        metrics: dict[str, Decimal] = {}
+        confidence = product_cell.confidence
+        for key, left in headers.items():
+            if key in {"product_name", "product_code"}:
+                continue
+            cell = _nearest_cell(row.cells, left, excluded={product_cell, code_cell})
+            if not cell:
+                continue
+            try:
+                metrics[key] = (
+                    parse_number(cell.text) if key == "sharpe" else parse_percent(cell.text)
+                )
+            except ValueError:
+                continue
+            confidence = min(confidence, cell.confidence)
+        if metrics:
+            results.append(
+                OCRMetricRow(
+                    product_name=product_cell.text,
+                    product_code=code_cell.text if code_cell else None,
+                    metrics=metrics,
+                    confidence=confidence,
+                )
+            )
+    return results
+
+
+def _nearest_cell(
+    cells: tuple[ParsedCell, ...], left: float, excluded: set[ParsedCell] | None = None
+) -> ParsedCell | None:
+    excluded = excluded or set()
+    candidates = [cell for cell in cells if cell not in excluded]
+    return min(candidates, key=lambda cell: abs(cell.left - left), default=None)

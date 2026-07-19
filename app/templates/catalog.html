@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">CATALOG</p><h1>产品目录</h1></div></div>
+{% if user.role == 'admin' %}<form class="form-panel compact" method="post" action="/catalog/import" enctype="multipart/form-data"><input type="hidden" name="token" value="{{ csrf_token }}"><label>导入 CSV<input type="file" name="catalog_file" accept=".csv" required><small>列名必须为 product_name, product_code, product_type。</small></label><button class="primary" type="submit">导入目录</button></form>{% endif %}
+<table><thead><tr><th>代码</th><th>产品名称</th><th>类型</th></tr></thead><tbody>{% for product in products %}<tr><td>{{ product.product_code }}</td><td>{{ product.product_name }}</td><td>{{ product.product_type }}</td></tr>{% else %}<tr><td colspan="3" class="muted">还没有产品目录</td></tr>{% endfor %}</tbody></table>
+{% endblock %}

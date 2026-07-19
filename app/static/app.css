@@ -1,0 +1,30 @@
+:root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans GB", "Microsoft YaHei", sans-serif; color: #24323d; background: #f4f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.topbar { height: 60px; background: #193f67; color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; }
+.brand, nav a, .link-button { color: #fff; text-decoration: none; font-size: 14px; }
+.brand { font-weight: 700; letter-spacing: .03em; }
+nav { display: flex; align-items: center; gap: 22px; }
+.inline-form { display: inline; }
+.link-button { background: none; border: 0; padding: 0; cursor: pointer; }
+.link-button.dark { color: #1f5d89; }
+.container { max-width: 1120px; margin: 0 auto; padding: 36px 24px 72px; }
+.page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.eyebrow { color: #5d7992; font-size: 11px; font-weight: 700; letter-spacing: .14em; margin: 0 0 7px; }
+h1 { font-size: 28px; line-height: 1.2; margin: 0; color: #193f67; }
+.button, button { border: 0; cursor: pointer; font: inherit; }
+.primary { background: #1f5d89; color: #fff; border-radius: 4px; padding: 10px 16px; text-decoration: none; display: inline-block; }
+.form-panel, .login-panel { background: #fff; border: 1px solid #dce3e9; border-radius: 6px; padding: 24px; max-width: 720px; }
+.login-panel { max-width: 420px; margin: 80px auto; }
+label { display: grid; gap: 7px; font-weight: 600; margin-bottom: 18px; }
+input[type="text"], input[type="password"], input[type="date"], input[type="file"] { font: inherit; border: 1px solid #c9d4dd; border-radius: 4px; padding: 9px 10px; background: #fff; }
+small, .muted { color: #71808c; font-weight: 400; }
+small { font-size: 12px; }
+table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dce3e9; }
+th, td { text-align: left; border-bottom: 1px solid #e8edf1; padding: 12px 14px; font-size: 13px; vertical-align: top; }
+th { background: #e8f0f6; color: #244d6f; font-weight: 700; }
+.status { display: inline-block; padding: 3px 7px; background: #eef3f6; color: #425c6f; border-radius: 3px; font-size: 12px; }
+.error { color: #a23c3c; background: #fff0f0; padding: 10px; border-radius: 4px; }
+.actions { margin-top: 18px; }
+.actions .button { background: #e8edf1; color: #27435a; padding: 9px 14px; text-decoration: none; border-radius: 4px; }
+.actions form { margin-right: 10px; }

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}投研净值更新工具{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/updates">投研净值更新工具</a>
+    {% if user %}
+    <nav>
+      <a href="/updates">更新历史</a>
+      <a href="/updates/new">新建更新</a>
+      <a href="/catalog">产品目录</a>
+      {% if user.role == 'admin' %}<a href="/admin/users">账号</a>{% endif %}
+      <form method="post" action="/logout" class="inline-form">
+        <input type="hidden" name="token" value="{{ csrf_token }}">
+        <button type="submit" class="link-button">退出</button>
+      </form>
+    </nav>
+    {% endif %}
+  </header>
+  <main class="container">{% block content %}{% endblock %}</main>
+</body>
+</html>
