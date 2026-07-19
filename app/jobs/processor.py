@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,6 +36,10 @@ ALL_METRICS = (
     "sharpe",
     "max_drawdown",
 )
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _product_records(products: Iterable[Product]) -> list[CatalogRecord]:
@@ -132,8 +136,8 @@ def process_run(
     if run is None:
         raise ValueError(f"run {run_id} not found")
     run.status = RUN_PROCESSING
-    run.started_at = run.started_at or datetime.utcnow()
-    run.heartbeat_at = datetime.utcnow()
+    run.started_at = run.started_at or utcnow()
+    run.heartbeat_at = utcnow()
     session.commit()
     try:
         adapter = adapter or TemplateAdapter()

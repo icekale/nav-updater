@@ -6,17 +6,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY pyproject.toml ./
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
+COPY entrypoint.sh ./entrypoint.sh
 
-RUN pip install --no-cache-dir .
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" . \
+    && pip uninstall -y opencv-python
+
+RUN chmod +x ./entrypoint.sh
 
 EXPOSE 8080
 
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

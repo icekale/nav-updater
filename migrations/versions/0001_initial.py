@@ -4,15 +4,15 @@ Revision ID: 0001_initial
 Revises:
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision: str = "0001_initial"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -53,7 +53,12 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("product_id", "nav_date", "source_kind", name="uq_nav_source"),
     )
-    op.create_index("ix_nav_observations_product_id", "nav_observations", ["product_id"], unique=False)
+    op.create_index(
+        "ix_nav_observations_product_id",
+        "nav_observations",
+        ["product_id"],
+        unique=False,
+    )
     op.create_table(
         "update_runs",
         sa.Column("id", sa.Integer(), nullable=False),

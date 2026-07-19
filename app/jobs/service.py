@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -20,6 +20,10 @@ RUN_PROCESSING = "processing"
 RUN_COMPLETED = "completed"
 RUN_COMPLETED_WARNINGS = "completed_with_warnings"
 RUN_FAILED = "failed"
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -89,7 +93,7 @@ def create_run(
 
 
 def claim_next_run(session: Session, now: datetime | None = None) -> UpdateRun | None:
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     stale_before = now - timedelta(minutes=30)
     query = (
         select(UpdateRun)
@@ -117,7 +121,7 @@ def heartbeat(session: Session, run_id: int, now: datetime | None = None) -> Non
     run = session.get(UpdateRun, run_id)
     if run is None or run.status != RUN_PROCESSING:
         raise ValueError(f"run {run_id} is not processing")
-    run.heartbeat_at = now or datetime.utcnow()
+    run.heartbeat_at = now or utcnow()
     session.commit()
 
 
@@ -182,7 +186,7 @@ def finish_run(
     run.status = RUN_COMPLETED_WARNINGS if warnings else RUN_COMPLETED
     run.output_path = output_path
     run.error_message = error_message
-    run.finished_at = datetime.utcnow()
+    run.finished_at = utcnow()
     session.commit()
     return run
 
@@ -193,6 +197,6 @@ def fail_run(session: Session, run_id: int, error_message: str) -> UpdateRun:
         raise ValueError(f"run {run_id} not found")
     run.status = RUN_FAILED
     run.error_message = error_message
-    run.finished_at = datetime.utcnow()
+    run.finished_at = utcnow()
     session.commit()
     return run

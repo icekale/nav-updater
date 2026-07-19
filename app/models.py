@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -8,6 +8,10 @@ from sqlalchemy import JSON, Date, DateTime, ForeignKey, Numeric, String, Text, 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class User(Base):
@@ -18,7 +22,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="user")
     is_active: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Product(Base):
@@ -30,7 +34,7 @@ class Product(Base):
     product_type: Mapped[str] = mapped_column(String(20))
     historical_names: Mapped[list[str]] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class NavObservation(Base):
@@ -45,7 +49,7 @@ class NavObservation(Base):
     cumulative_nav: Mapped[Decimal] = mapped_column(Numeric(24, 12))
     source_kind: Mapped[str] = mapped_column(String(30))
     source_ref: Mapped[str | None] = mapped_column(Text)
-    imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     product: Mapped[Product] = relationship()
 
@@ -57,7 +61,7 @@ class UpdateRun(Base):
     operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     cutoff_date: Mapped[date] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(40), default="uploaded", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -109,4 +113,4 @@ class AuditLog(Base):
     object_type: Mapped[str] = mapped_column(String(80))
     object_id: Mapped[str] = mapped_column(String(100))
     context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
