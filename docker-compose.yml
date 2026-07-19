@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nav
+      POSTGRES_USER: nav
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nav}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nav -d nav"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://nav:nav@db:5432/nav}
+      DATA_DIR: ${DATA_DIR:-/data}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - app_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+    restart: unless-stopped
+
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://nav:nav@db:5432/nav}
+      DATA_DIR: ${DATA_DIR:-/data}
+    volumes:
+      - app_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "app.jobs.worker"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  app_data:
