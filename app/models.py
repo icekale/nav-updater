@@ -114,3 +114,30 @@ class AuditLog(Base):
     object_id: Mapped[str] = mapped_column(String(100))
     context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(64), unique=True)
+    title: Mapped[str] = mapped_column(String(255))
+    date_raw: Mapped[str] = mapped_column(String(100))
+    date_start: Mapped[date | None] = mapped_column(Date, index=True)
+    date_end: Mapped[date | None] = mapped_column(Date, index=True)
+    date_parse_status: Mapped[str] = mapped_column(String(30), default="unparsed")
+    level: Mapped[str] = mapped_column(Text)
+    core_statement: Mapped[str] = mapped_column(Text)
+    market_impact: Mapped[str] = mapped_column(Text)
+    research_mapping: Mapped[str] = mapped_column(Text)
+    follow_up: Mapped[str] = mapped_column(Text)
+    source_link: Mapped[str] = mapped_column(Text)
+    source_updated_at: Mapped[str] = mapped_column(String(100))
+    company_tags: Mapped[str] = mapped_column(Text, default="")
+    industry_tags: Mapped[str] = mapped_column(Text, default="")
+    attendance_status: Mapped[str] = mapped_column(String(20), default="unplanned")
+    minutes: Mapped[str] = mapped_column(Text, default="")
+    todo: Mapped[str] = mapped_column(Text, default="")
+    conclusion: Mapped[str] = mapped_column(Text, default="")
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
