@@ -11,6 +11,7 @@ from app.db import Base
 from app.domain.matching import CatalogRecord
 from app.domain.types import NavPoint
 from app.excel.template_adapter import TemplateAdapter
+from app.jobs.processor import ALL_METRICS, process_run
 from app.jobs.service import (
     RUN_COMPLETED,
     RUN_PROCESSING,
@@ -19,7 +20,7 @@ from app.jobs.service import (
     finish_run,
     metric_values_from_nav,
 )
-from app.models import Product, RunItem, UpdateRun, User
+from app.models import Product, RunFile, RunItem, UpdateRun, User
 
 
 def test_catalog_import_persists_products_and_run_state() -> None:
@@ -183,3 +184,66 @@ def test_save_manual_review_requires_note_and_at_least_one_metric() -> None:
             inputs={},
             note="人工核对",
         )
+
+
+def test_process_run_uses_manual_values_without_calling_provider() -> None:
+    class CapturingAdapter:
+        updates: dict[int, dict[str, Decimal]]
+        stale: dict[int, set[str]]
+
+        def apply_updates(self, input_path, output_path, updates, stale) -> None:
+            self.updates = updates
+            self.stale = stale
+
+    class FailingProvider:
+        def fetch_history(self, product_code: str):
+            raise AssertionError(f"provider should not be called for {product_code}")
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    product = Product(product_name="仁桥金选泽源5B", product_code="P001", product_type="private")
+    session.add_all([admin, product])
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    session.add(
+        RunFile(
+            run_id=run.id,
+            file_type="workbook",
+            original_name="template.xlsx",
+            storage_path="/tmp/template.xlsx",
+            sha256="0" * 64,
+        )
+    )
+    statuses = {metric: "stale" for metric in ALL_METRICS}
+    statuses.update({"weekly": "manual", "sharpe": "manual"})
+    item = RunItem(
+        run_id=run.id,
+        excel_row=2,
+        product_id=product.id,
+        match_source="manual",
+        row_status="stale",
+        metric_values={"weekly": "0.1234", "sharpe": "1.25"},
+        metric_status=statuses,
+        original_values={"product_name": "仁桥金选泽源5B"},
+    )
+    session.add(item)
+    session.commit()
+    adapter = CapturingAdapter()
+
+    process_run(
+        session,
+        run.id,
+        provider=FailingProvider(),
+        ocr_service=object(),
+        adapter=adapter,
+    )
+
+    assert adapter.updates[item.excel_row] == {
+        "weekly": Decimal("0.1234"),
+        "sharpe": Decimal("1.25"),
+    }
+    assert "mtd" in adapter.stale[item.excel_row]

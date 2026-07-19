@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from sqlalchemy import select
@@ -106,6 +106,21 @@ def _stale_metrics(statuses: dict[str, str]) -> set[str]:
     }
 
 
+def _manual_values(item: RunItem) -> dict[str, Decimal]:
+    values: dict[str, Decimal] = {}
+    for metric in ALL_METRICS:
+        raw = item.metric_values.get(metric)
+        if raw is None:
+            continue
+        try:
+            value = Decimal(str(raw))
+        except InvalidOperation:
+            continue
+        if value.is_finite():
+            values[metric] = value
+    return values
+
+
 def _set_item(
     item: RunItem,
     *,
@@ -158,6 +173,11 @@ def process_run(
         items = session.scalars(select(RunItem).where(RunItem.run_id == run_id)).all()
         for item in items:
             name = str(item.original_values.get("product_name", ""))
+            if item.match_source == "manual":
+                updates[item.excel_row] = _manual_values(item)
+                stale[item.excel_row] = _stale_metrics(item.metric_status)
+                warnings = warnings or item.row_status != "ready" or bool(stale[item.excel_row])
+                continue
             image_row = _find_image_row(name, screenshot_rows, products)
             product = next(
                 (p for p in products if normalize_name(p.product_name) == normalize_name(name)),
