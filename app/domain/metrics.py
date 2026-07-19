@@ -55,9 +55,7 @@ def _combine_status(*statuses: MetricStatus) -> MetricStatus:
     return MetricStatus.INSUFFICIENT_DATA
 
 
-def _return_between(
-    points: list[NavPoint], start: date, end: date, kind: str
-) -> MetricValue:
+def _return_between(points: list[NavPoint], start: date, end: date, kind: str) -> MetricValue:
     start_point, start_status = _effective(points, start, kind)
     end_point, end_status = _effective(points, end, kind)
     if not start_point or not end_point:
@@ -110,9 +108,7 @@ def _annualization_factor(points: list[NavPoint], cutoff: date, kind: str) -> De
     return min(factor, Decimal("252"))
 
 
-def calculate_sharpe(
-    points: Iterable[NavPoint], cutoff: date, kind: str = "public"
-) -> RiskMetric:
+def calculate_sharpe(points: Iterable[NavPoint], cutoff: date, kind: str = "public") -> RiskMetric:
     ordered = _deduplicate(points)
     window_start = _year_before(cutoff)
     latest, latest_status = _effective(ordered, cutoff, kind)
@@ -126,8 +122,7 @@ def calculate_sharpe(
         return RiskMetric(None, MetricStatus.INSUFFICIENT_DATA)
     with_baseline = [baseline] + window
     returns = [
-        right.value / left.value - _ONE
-        for left, right in zip(with_baseline, with_baseline[1:])
+        right.value / left.value - _ONE for left, right in zip(with_baseline, with_baseline[1:])
     ]
     if len(returns) < 3:
         return RiskMetric(None, MetricStatus.INSUFFICIENT_DATA)
