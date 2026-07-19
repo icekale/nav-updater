@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}会议跟踪 | 投研净值更新工具{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">RESEARCH WORKSPACE</p><h1>资本市场核心会议</h1></div>
+</div>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+
+<section class="form-panel filter-panel">
+  <form method="get" action="/meetings" class="filter-grid">
+    <label>关键词<input type="search" name="q" value="{{ filters.q }}" placeholder="会议、政策或投研映射"></label>
+    <label>开始日期<input type="date" name="date_from" value="{{ filters.date_from }}"></label>
+    <label>结束日期<input type="date" name="date_to" value="{{ filters.date_to }}"></label>
+    <label>性质/层级<select name="level"><option value="">全部</option>{% for item in levels %}<option value="{{ item }}" {% if filters.level == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+    <label>公司标签<input type="search" name="company" value="{{ filters.company }}" placeholder="如：券商"></label>
+    <label>行业标签<input type="search" name="industry" value="{{ filters.industry }}" placeholder="如：金融"></label>
+    <div class="filter-actions"><button type="submit" class="primary">筛选</button><a class="button" href="/meetings">重置</a></div>
+  </form>
+</section>
+
+{% if user.role == 'admin' %}
+<section class="form-panel import-panel">
+  <div><h2>导入会议更新</h2><p class="muted">仅读取“近期会议更新”工作表；重复导入会更新来源内容，保留团队记录。</p></div>
+  <form method="post" action="/meetings/import" enctype="multipart/form-data" class="import-form">
+    <input type="hidden" name="token" value="{{ csrf_token }}">
+    <input type="file" name="workbook" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+    <button type="submit" class="primary">导入 Excel</button>
+  </form>
+</section>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="meeting-table">
+    <thead><tr><th>日期</th><th>会议/事件</th><th>性质/层级</th><th>资本市场影响</th><th>标签</th><th>参会</th><th></th></tr></thead>
+    <tbody>
+      {% for meeting in meetings %}
+      <tr>
+        <td>{{ meeting.date_raw or '待定' }}</td>
+        <td><a class="meeting-title" href="/meetings/{{ meeting.id }}">{{ meeting.title }}</a></td>
+        <td>{{ meeting.level or '-' }}</td>
+        <td>{{ meeting.market_impact[:120] }}{% if meeting.market_impact|length > 120 %}...{% endif %}</td>
+        <td>{% if meeting.company_tags or meeting.industry_tags %}<span class="tag-list">{{ meeting.company_tags }}{% if meeting.company_tags and meeting.industry_tags %} · {% endif %}{{ meeting.industry_tags }}</span>{% else %}<span class="muted">未标注</span>{% endif %}</td>
+        <td><span class="status">{{ attendance_labels.get(meeting.attendance_status, '未安排') }}</span></td>
+        <td><a href="/meetings/{{ meeting.id }}">详情</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">暂无会议记录。管理员可导入会议更新 Excel。</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

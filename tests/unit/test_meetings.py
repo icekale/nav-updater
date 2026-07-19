@@ -61,3 +61,12 @@ def test_read_meeting_rows_rejects_missing_required_header(tmp_path: Path) -> No
 
     with pytest.raises(meetings.MeetingImportError, match="缺少列"):
         meetings.read_meeting_rows(workbook)
+
+
+def test_read_meeting_rows_rejects_invalid_workbook(tmp_path: Path) -> None:
+    meetings = meeting_module()
+    workbook = tmp_path / "invalid.xlsx"
+    workbook.write_bytes(b"not an xlsx workbook")
+
+    with pytest.raises(meetings.MeetingImportError, match="无法读取"):
+        meetings.read_meeting_rows(workbook)

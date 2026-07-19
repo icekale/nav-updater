@@ -4,8 +4,10 @@ import hashlib
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from zipfile import BadZipFile
 
 from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -80,7 +82,10 @@ def source_key(title: str, date_raw: str) -> str:
 
 
 def read_meeting_rows(path: Path) -> list[MeetingRow]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except (BadZipFile, InvalidFileException, OSError) as exc:
+        raise MeetingImportError("无法读取 Excel 工作簿") from exc
     try:
         if SHEET_NAME not in workbook.sheetnames:
             raise MeetingImportError(f"未找到工作表：{SHEET_NAME}")

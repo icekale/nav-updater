@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ meeting.title }} | 会议跟踪{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">MEETING DETAIL</p><h1>{{ meeting.title }}</h1></div>
+  <div class="actions"><a class="button" href="/meetings">返回列表</a></div>
+</div>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<div class="meeting-detail-grid">
+  <section class="source-panel">
+    <h2>来源内容</h2>
+    <dl class="source-meta">
+      <div><dt>日期</dt><dd>{{ meeting.date_raw or '待定' }}</dd></div>
+      <div><dt>性质/层级</dt><dd>{{ meeting.level or '-' }}</dd></div>
+      <div><dt>更新时间</dt><dd>{{ meeting.source_updated_at or '-' }}</dd></div>
+      <div><dt>日期状态</dt><dd>{{ '已标准化' if meeting.date_parse_status == 'normalized' else '未标准化' }}</dd></div>
+    </dl>
+    <div class="source-section"><h3>核心表述</h3><p class="detail-copy">{{ meeting.core_statement or '-' }}</p></div>
+    <div class="source-section"><h3>资本市场影响</h3><p class="detail-copy">{{ meeting.market_impact or '-' }}</p></div>
+    <div class="source-section"><h3>投研映射</h3><p class="detail-copy">{{ meeting.research_mapping or '-' }}</p></div>
+    <div class="source-section"><h3>后续跟踪</h3><p class="detail-copy">{{ meeting.follow_up or '-' }}</p></div>
+    <div class="source-section"><h3>来源链接</h3>{% for link in meeting.source_link.split('；') if link.strip() %}<a href="{{ link.strip() }}" target="_blank" rel="noreferrer">来源 {{ loop.index }}</a>{% if not loop.last %} · {% endif %}{% else %}<span class="muted">未提供</span>{% endfor %}</div>
+  </section>
+
+  <form method="post" action="/meetings/{{ meeting.id }}/record" class="form-panel meeting-record">
+    <input type="hidden" name="token" value="{{ csrf_token }}">
+    <h2>团队记录</h2>
+    <label>公司标签<small>用逗号或分号分隔</small><input type="text" name="company_tags" value="{{ meeting.company_tags }}" placeholder="如：券商, 创投"></label>
+    <label>行业标签<small>用逗号或分号分隔</small><input type="text" name="industry_tags" value="{{ meeting.industry_tags }}" placeholder="如：金融, 科技"></label>
+    <label>参会状态<select name="attendance_status">{% for value, label in attendance_options %}<option value="{{ value }}" {% if meeting.attendance_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>会议纪要<textarea name="minutes" rows="6">{{ meeting.minutes }}</textarea></label>
+    <label>待办<textarea name="todo" rows="4">{{ meeting.todo }}</textarea></label>
+    <label>结论<textarea name="conclusion" rows="4">{{ meeting.conclusion }}</textarea></label>
+    <div class="actions"><button type="submit" class="primary">保存团队记录</button><span class="muted">当前状态：{{ attendance_labels.get(meeting.attendance_status, '未安排') }}</span></div>
+  </form>
+</div>
+{% endblock %}

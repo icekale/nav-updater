@@ -4,6 +4,7 @@ import shutil
 import uuid
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -34,7 +35,25 @@ from .jobs.review import (
     save_manual_review,
 )
 from .jobs.service import create_run, resolve_item
-from .models import AuditLog, Product, RunItem, UpdateRun, User
+from .meetings import MeetingImportError, import_meetings
+from .models import AuditLog, Meeting, Product, RunItem, UpdateRun, User
+
+ATTENDANCE_OPTIONS = (
+    ("unplanned", "未安排"),
+    ("planned", "计划参会"),
+    ("attended", "已参会"),
+    ("absent", "未参会"),
+)
+ATTENDANCE_LABELS = dict(ATTENDANCE_OPTIONS)
+
+
+def _parse_filter_date(value: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def create_app(
@@ -129,6 +148,228 @@ def create_app(
             name="updates.html",
             context={"user": user, "runs": runs, "csrf_token": csrf_token(request)},
         )
+
+    def meeting_list_response(
+        request: Request,
+        user: User,
+        session: Session,
+        *,
+        q: str = "",
+        date_from: str = "",
+        date_to: str = "",
+        level: str = "",
+        company: str = "",
+        industry: str = "",
+        error: str | None = None,
+        notice: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        statement = select(Meeting)
+        if q.strip():
+            term = f"%{q.strip()}%"
+            statement = statement.where(
+                Meeting.title.ilike(term)
+                | Meeting.level.ilike(term)
+                | Meeting.market_impact.ilike(term)
+                | Meeting.research_mapping.ilike(term)
+            )
+        if level:
+            statement = statement.where(Meeting.level == level)
+        if company.strip():
+            statement = statement.where(Meeting.company_tags.ilike(f"%{company.strip()}%"))
+        if industry.strip():
+            statement = statement.where(Meeting.industry_tags.ilike(f"%{industry.strip()}%"))
+        start = _parse_filter_date(date_from)
+        end = _parse_filter_date(date_to)
+        if start:
+            statement = statement.where(Meeting.date_end >= start)
+        if end:
+            statement = statement.where(Meeting.date_start <= end)
+        ordered = statement.order_by(Meeting.date_start.desc(), Meeting.id.desc())
+        meetings = session.scalars(ordered).all()
+        levels = session.scalars(select(Meeting.level).distinct().order_by(Meeting.level)).all()
+        return templates.TemplateResponse(
+            request=request,
+            name="meetings.html",
+            context={
+                "user": user,
+                "meetings": meetings,
+                "levels": levels,
+                "filters": {
+                    "q": q,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "level": level,
+                    "company": company,
+                    "industry": industry,
+                },
+                "attendance_labels": ATTENDANCE_LABELS,
+                "csrf_token": csrf_token(request),
+                "error": error,
+                "notice": notice,
+            },
+            status_code=status_code,
+        )
+
+    @app.get("/meetings", response_class=HTMLResponse)
+    def meetings_page(
+        request: Request,
+        q: str = "",
+        date_from: str = "",
+        date_to: str = "",
+        level: str = "",
+        company: str = "",
+        industry: str = "",
+        notice: str | None = None,
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        return meeting_list_response(
+            request,
+            user,
+            session,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            level=level,
+            company=company,
+            industry=industry,
+            notice=notice,
+        )
+
+    @app.post("/meetings/import", response_class=HTMLResponse)
+    async def meeting_import(
+        request: Request,
+        token: str = Form(...),
+        workbook: UploadFile | None = File(None),
+        user: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        if workbook is None or not workbook.filename:
+            return meeting_list_response(
+                request, user, session, error="请上传会议 Excel", status_code=422
+            )
+        filename = Path(workbook.filename).name
+        if Path(filename).suffix.lower() != ".xlsx":
+            return meeting_list_response(
+                request, user, session, error="仅支持 .xlsx 文件", status_code=422
+            )
+        import_dir = ensure_data_dir(app.state.settings) / "meeting-imports"
+        import_dir.mkdir(parents=True, exist_ok=True)
+        temporary_path = import_dir / f"{uuid.uuid4().hex}.xlsx"
+        try:
+            with temporary_path.open("wb") as handle:
+                shutil.copyfileobj(workbook.file, handle)
+            result = import_meetings(session, temporary_path)
+        except MeetingImportError as exc:
+            return meeting_list_response(request, user, session, error=str(exc), status_code=422)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        session.add(
+            AuditLog(
+                actor_id=user.id,
+                action="import",
+                object_type="meeting_workbook",
+                object_id="meeting_workbook",
+                context={
+                    "filename": filename,
+                    "created": result.created,
+                    "updated": result.updated,
+                    "skipped": result.skipped,
+                },
+            )
+        )
+        session.commit()
+        notice = urlencode({"notice": f"导入 {result.created} 条，更新 {result.updated} 条"})
+        return RedirectResponse(f"/meetings?{notice}", status_code=status.HTTP_303_SEE_OTHER)
+
+    def meeting_detail_response(
+        request: Request,
+        user: User,
+        meeting: Meeting,
+        *,
+        error: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="meeting_detail.html",
+            context={
+                "user": user,
+                "meeting": meeting,
+                "attendance_options": ATTENDANCE_OPTIONS,
+                "attendance_labels": ATTENDANCE_LABELS,
+                "csrf_token": csrf_token(request),
+                "error": error,
+            },
+            status_code=status_code,
+        )
+
+    @app.get("/meetings/{meeting_id}", response_class=HTMLResponse)
+    def meeting_detail(
+        meeting_id: int,
+        request: Request,
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        meeting = session.get(Meeting, meeting_id)
+        if meeting is None:
+            return HTMLResponse("会议不存在", status_code=404)
+        return meeting_detail_response(request, user, meeting)
+
+    @app.post("/meetings/{meeting_id}/record", response_class=HTMLResponse)
+    def save_meeting_record(
+        meeting_id: int,
+        request: Request,
+        token: str = Form(...),
+        company_tags: str = Form(""),
+        industry_tags: str = Form(""),
+        attendance_status: str = Form("unplanned"),
+        minutes: str = Form(""),
+        todo: str = Form(""),
+        conclusion: str = Form(""),
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        meeting = session.get(Meeting, meeting_id)
+        if meeting is None:
+            return HTMLResponse("会议不存在", status_code=404)
+        if attendance_status not in ATTENDANCE_LABELS:
+            return meeting_detail_response(
+                request,
+                user,
+                meeting,
+                error="参会状态无效",
+                status_code=422,
+            )
+        meeting.company_tags = company_tags.strip()
+        meeting.industry_tags = industry_tags.strip()
+        meeting.attendance_status = attendance_status
+        meeting.minutes = minutes.strip()
+        meeting.todo = todo.strip()
+        meeting.conclusion = conclusion.strip()
+        session.add(
+            AuditLog(
+                actor_id=user.id,
+                action="update",
+                object_type="meeting",
+                object_id=str(meeting.id),
+                context={
+                    "fields": [
+                        "company_tags",
+                        "industry_tags",
+                        "attendance_status",
+                        "minutes",
+                        "todo",
+                        "conclusion",
+                    ]
+                },
+            )
+        )
+        session.commit()
+        return RedirectResponse(f"/meetings/{meeting.id}", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.get("/updates/new", response_class=HTMLResponse)
     def new_update_page(request: Request, user: User = Depends(current_user)):
