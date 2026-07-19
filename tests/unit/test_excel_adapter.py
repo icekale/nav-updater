@@ -52,3 +52,17 @@ def test_blank_product_row_is_not_written(tmp_path: Path) -> None:
     with ZipFile(output) as archive:
         sheet = etree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
     assert not sheet.xpath('.//x:c[@r="F8"]', namespaces=NS)
+
+
+def test_stale_without_new_value_keeps_existing_cell(tmp_path: Path) -> None:
+    output = tmp_path / "updated.xlsx"
+    TemplateAdapter().apply_updates(
+        FIXTURE,
+        output,
+        {2: {"weekly": None}},
+        {2: {"weekly"}},
+    )
+    with ZipFile(output) as archive:
+        sheet = etree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+    cell = sheet.xpath('.//x:c[@r="F2"]', namespaces=NS)[0]
+    assert cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v") is None

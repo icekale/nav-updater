@@ -193,9 +193,8 @@ class TemplateAdapter:
                     if metric in PERCENT_METRICS and value is not None:
                         value *= Decimal("100")
                     cell = _find_or_create_cell(sheet, row_number, headers[metric], row_style)
-                    _set_numeric(
-                        cell, value.quantize(Decimal("0.01")) if value is not None else None
-                    )
+                    if value is not None:
+                        _set_numeric(cell, value.quantize(Decimal("0.01")))
                     if metric in stale.get(row_number, set()) and error_style is not None:
                         cell.set("s", str(error_style))
             parts[SHEET_PATH] = etree.tostring(
