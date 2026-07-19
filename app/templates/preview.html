@@ -5,7 +5,8 @@
 {% for item in items %}<tr><td>{{ item.excel_row }}</td><td>{{ item.original_values.get('product_name', '') }}</td><td>{{ item.match_source }}</td><td><span class="status">{{ item.row_status }}</span></td><td>{{ item.error_reason or '' }}</td><td>{% if item.row_status == 'needs_review' %}<form method="post" action="/updates/{{ run.id }}/items/{{ item.id }}/resolve" class="inline-form"><input type="hidden" name="token" value="{{ csrf_token }}"><input type="hidden" name="action" value="skip"><button type="submit" class="link-button dark">跳过</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">没有可处理的产品行</td></tr>{% endfor %}
 </tbody></table>
 <div class="actions">
-  {% if run.status in ['uploaded', 'needs_review', 'failed'] %}<form method="post" action="/updates/{{ run.id }}/process" class="inline-form"><input type="hidden" name="token" value="{{ csrf_token }}"><button class="primary" type="submit">开始处理</button></form>{% endif %}
+  <a class="button" href="/updates/{{ run.id }}/review">人工审核</a>
+  {% if run.status in ['uploaded', 'needs_review', 'failed', 'completed', 'completed_with_warnings'] %}<form method="post" action="/updates/{{ run.id }}/process" class="inline-form"><input type="hidden" name="token" value="{{ csrf_token }}"><button class="primary" type="submit">{{ '重新生成结果' if run.output_path else '开始处理' }}</button></form>{% endif %}
   {% if run.output_path %}<a class="button" href="/updates/{{ run.id }}/download">下载结果 Excel</a>{% endif %}
   <a class="button" href="/updates">返回历史</a>
 </div>

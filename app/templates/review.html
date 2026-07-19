@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">RUN #{{ run.id }}</p><h1>人工审核</h1><p class="muted">截止日：{{ run.cutoff_date }} · 每条审核独立保存，已保存的数据在重新生成时优先使用。</p></div><a class="button" href="/updates/{{ run.id }}/preview">返回匹配预览</a></div>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% for row in review_rows %}
+{% set item = row.item %}
+<form class="review-item" method="post" action="/updates/{{ run.id }}/items/{{ item.id }}/review">
+  <input type="hidden" name="token" value="{{ csrf_token }}">
+  <div class="review-item-heading"><div><h2>{{ item.original_values.get('product_name', '') }}</h2><p class="muted">Excel 第 {{ item.excel_row }} 行 · 来源：{{ item.match_source }} · 状态：{{ item.row_status }}</p></div><span class="status">{{ item.row_status }}</span></div>
+  {% if item.error_reason %}<p class="review-reason">{{ item.error_reason }}</p>{% endif %}
+  <div class="review-meta">
+    <label>确认产品<select name="product_id" required><option value="">请选择产品</option>{% for product in products %}<option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>{{ product.product_code }} · {{ product.product_name }}</option>{% endfor %}</select></label>
+    <label>审核说明<textarea name="review_note" rows="2" required placeholder="例如：以管理人 7 月 17 日净值表为准">{% if item.match_source == 'manual' %}{{ item.error_reason.replace('人工审核：', '', 1) if item.error_reason else '' }}{% endif %}</textarea></label>
+  </div>
+  <div class="review-metrics">{% for field in metric_fields %}<label>{{ field.label }}<input type="text" name="{{ field.name }}" inputmode="decimal" value="{{ row.metric_values[field.name] }}" placeholder="{% if field.is_percent %}百分比数值{% else %}数值{% endif %}"></label>{% endfor %}</div>
+  <div class="review-actions"><small>至少填写一个指标。百分比字段填写 12.34 即表示 12.34%；留空字段会保留原 Excel 值并标红。</small><button class="primary" type="submit">保存审核</button></div>
+</form>
+{% else %}<p class="muted">该批次没有可审核的产品行。</p>{% endfor %}
+{% endblock %}

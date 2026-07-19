@@ -27,6 +27,12 @@ from .config import Settings, ensure_data_dir, get_settings
 from .db import SessionLocal, get_session
 from .domain.matching import parse_catalog_csv
 from .jobs.processor import ALL_METRICS, process_run
+from .jobs.review import (
+    METRIC_FIELDS,
+    ManualReviewError,
+    formatted_metric_values,
+    save_manual_review,
+)
 from .jobs.service import create_run, resolve_item
 from .models import AuditLog, Product, RunItem, UpdateRun, User
 
@@ -205,6 +211,104 @@ def create_app(
                 "csrf_token": csrf_token(request),
             },
         )
+
+    def review_response(
+        request: Request,
+        run: UpdateRun,
+        session: Session,
+        user: User,
+        *,
+        error: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        products = session.scalars(
+            select(Product).where(Product.is_active.is_(True)).order_by(Product.product_code)
+        ).all()
+        review_rows = [
+            {"item": item, "metric_values": formatted_metric_values(item)} for item in run.items
+        ]
+        return templates.TemplateResponse(
+            request=request,
+            name="review.html",
+            context={
+                "user": user,
+                "run": run,
+                "products": products,
+                "review_rows": review_rows,
+                "metric_fields": METRIC_FIELDS,
+                "csrf_token": csrf_token(request),
+                "error": error,
+            },
+            status_code=status_code,
+        )
+
+    @app.get("/updates/{run_id}/review", response_class=HTMLResponse)
+    def review_update(
+        run_id: int,
+        request: Request,
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        run = session.get(UpdateRun, run_id)
+        if run is None:
+            return HTMLResponse("批次不存在", status_code=404)
+        return review_response(request, run, session, user)
+
+    @app.post("/updates/{run_id}/items/{item_id}/review", response_class=HTMLResponse)
+    async def save_review(
+        run_id: int,
+        item_id: int,
+        request: Request,
+        token: str = Form(...),
+        product_id: int = Form(...),
+        review_note: str = Form(...),
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        run = session.get(UpdateRun, run_id)
+        item = session.get(RunItem, item_id)
+        if run is None or item is None or item.run_id != run_id:
+            return HTMLResponse("条目不存在", status_code=404)
+        product = session.scalar(
+            select(Product).where(Product.id == product_id, Product.is_active.is_(True))
+        )
+        if product is None:
+            return review_response(
+                request,
+                run,
+                session,
+                user,
+                error="请选择有效产品",
+                status_code=422,
+            )
+        form = await request.form()
+        inputs = {field.name: form.get(field.name, "") for field in METRIC_FIELDS}
+        try:
+            reviewed = save_manual_review(
+                session,
+                item=item,
+                product=product,
+                inputs=inputs,
+                note=review_note,
+            )
+        except ManualReviewError as exc:
+            return review_response(request, run, session, user, error=str(exc), status_code=422)
+        session.add(
+            AuditLog(
+                actor_id=user.id,
+                action="manual_review",
+                object_type="run_item",
+                object_id=str(reviewed.id),
+                context={
+                    "product_code": product.product_code,
+                    "metrics": reviewed.metric_values,
+                    "note": review_note.strip(),
+                },
+            )
+        )
+        session.commit()
+        return RedirectResponse(f"/updates/{run_id}/review", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/updates/{run_id}/process")
     def process_update(

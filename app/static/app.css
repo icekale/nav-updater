@@ -18,7 +18,7 @@ h1 { font-size: 28px; line-height: 1.2; margin: 0; color: #193f67; }
 .login-panel { max-width: 420px; margin: 80px auto; }
 .login-panel input { width: 100%; }
 label { display: grid; gap: 7px; font-weight: 600; margin-bottom: 18px; }
-input[type="text"], input[type="password"], input[type="date"], input[type="file"] { font: inherit; border: 1px solid #c9d4dd; border-radius: 4px; padding: 9px 10px; background: #fff; }
+input[type="text"], input[type="password"], input[type="date"], input[type="file"], select, textarea { font: inherit; border: 1px solid #c9d4dd; border-radius: 4px; padding: 9px 10px; background: #fff; }
 small, .muted { color: #71808c; font-weight: 400; }
 small { font-size: 12px; }
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dce3e9; }
@@ -29,3 +29,16 @@ th { background: #e8f0f6; color: #244d6f; font-weight: 700; }
 .actions { margin-top: 18px; }
 .actions .button { background: #e8edf1; color: #27435a; padding: 9px 14px; text-decoration: none; border-radius: 4px; }
 .actions form { margin-right: 10px; }
+.review-item { border-top: 1px solid #dce3e9; padding: 24px 0; }
+.review-item-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.review-item h2 { color: #193f67; font-size: 17px; margin: 0; }
+.review-item-heading .muted { margin: 6px 0 0; }
+.review-reason { color: #7b4a22; font-size: 13px; margin: 14px 0; }
+.review-meta { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 2fr); gap: 16px; }
+.review-meta select, .review-meta textarea { width: 100%; }
+.review-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; margin-top: 4px; }
+.review-metrics label { font-size: 13px; margin-bottom: 0; }
+.review-metrics input { width: 100%; }
+.review-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
+.review-actions small { max-width: 68ch; }
+@media (max-width: 700px) { .topbar { height: auto; min-height: 60px; align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px 20px; } nav { flex-wrap: wrap; gap: 12px; } .container { padding: 28px 16px 56px; } .page-heading { align-items: flex-start; flex-direction: column; } .review-meta { grid-template-columns: 1fr; } .review-actions { align-items: flex-start; flex-direction: column; } }
