@@ -1,0 +1,9 @@
+.git
+.worktrees
+.env
+.pytest_cache
+__pycache__
+*.py[cod]
+*.db
+tests
+docs
