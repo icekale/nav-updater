@@ -1,0 +1,1 @@
+"""Excel template adapters."""
