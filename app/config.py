@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    settings = Settings()
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    return settings
+    return Settings()
+
+
+def ensure_data_dir(settings: Settings | None = None) -> Path:
+    path = (settings or get_settings()).data_dir
+    path.mkdir(parents=True, exist_ok=True)
+    return path
