@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from app.ocr.engine import OCRToken
-from app.ocr.table_parser import group_rows, is_confident, parse_number, parse_percent
+from app.ocr.table_parser import (
+    extract_metric_rows,
+    group_rows,
+    is_confident,
+    parse_number,
+    parse_percent,
+)
 
 
 def fixture_tokens() -> list[OCRToken]:
@@ -32,3 +38,24 @@ def test_ambiguous_number_is_rejected() -> None:
         parse_percent("—")
     assert not is_confident(0.84)
     assert is_confident(0.85)
+
+
+def test_extract_metric_rows_from_header_and_data_tokens() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("产品名称", 10, 10),
+            token("近一周(%)", 100, 10),
+            token("近一年夏普比", 180, 10),
+            token("产品A", 10, 50),
+            token("5.20%", 100, 50),
+            token("1.25", 180, 50),
+        ]
+    )
+    assert len(rows) == 1
+    assert rows[0].product_name == "产品A"
+    assert rows[0].metrics == {"weekly": Decimal("0.052"), "sharpe": Decimal("1.25")}
