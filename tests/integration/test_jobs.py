@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -18,7 +19,7 @@ from app.jobs.service import (
     finish_run,
     metric_values_from_nav,
 )
-from app.models import Product, UpdateRun, User
+from app.models import Product, RunItem, UpdateRun, User
 
 
 def test_catalog_import_persists_products_and_run_state() -> None:
@@ -105,3 +106,80 @@ def test_finish_run_and_metric_adapter() -> None:
     )
     assert values["weekly"] == Decimal("0.009090909090909090909090909")
     assert statuses["weekly"] == "calculated"
+
+
+def test_save_manual_review_converts_percentages_and_marks_missing_values_stale() -> None:
+    from app.jobs import review
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    product = Product(product_name="仁桥金选泽源5B", product_code="P001", product_type="private")
+    session.add_all([admin, product])
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    item = RunItem(
+        run_id=run.id,
+        excel_row=2,
+        original_values={"product_name": "仁桥金选泽源5B"},
+    )
+    session.add(item)
+    session.commit()
+
+    reviewed = review.save_manual_review(
+        session,
+        item=item,
+        product=product,
+        inputs={"weekly": "12.34%", "sharpe": "1.25"},
+        note="以管理人 7 月 17 日净值表为准",
+    )
+
+    assert reviewed.match_source == "manual"
+    assert reviewed.row_status == "stale"
+    assert reviewed.metric_values == {"weekly": "0.1234", "sharpe": "1.25"}
+    assert reviewed.metric_status["weekly"] == "manual"
+    assert reviewed.metric_status["mtd"] == "stale"
+    assert reviewed.error_reason == "人工审核：以管理人 7 月 17 日净值表为准"
+
+
+def test_save_manual_review_requires_note_and_at_least_one_metric() -> None:
+    from app.jobs import review
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    product = Product(product_name="仁桥金选泽源5B", product_code="P001", product_type="private")
+    session.add_all([admin, product])
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    item = RunItem(
+        run_id=run.id,
+        excel_row=2,
+        original_values={"product_name": "仁桥金选泽源5B"},
+    )
+    session.add(item)
+    session.commit()
+
+    with pytest.raises(review.ManualReviewError, match="审核说明"):
+        review.save_manual_review(
+            session,
+            item=item,
+            product=product,
+            inputs={"weekly": "12.34"},
+            note="",
+        )
+
+    with pytest.raises(review.ManualReviewError, match="至少填写一个指标"):
+        review.save_manual_review(
+            session,
+            item=item,
+            product=product,
+            inputs={},
+            note="人工核对",
+        )
