@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from .domain.matching import CatalogRecord
 from .models import Product
+from .providers.public_fund import PublicFundRecord
 
 
 def import_catalog(session: Session, records: Iterable[CatalogRecord]) -> list[Product]:
@@ -32,3 +33,23 @@ def import_catalog(session: Session, records: Iterable[CatalogRecord]) -> list[P
         imported.append(product)
     session.flush()
     return imported
+
+
+def ensure_public_product(
+    session: Session, record: PublicFundRecord, source_name: str
+) -> tuple[Product, bool]:
+    product = session.scalar(select(Product).where(Product.product_code == record.code))
+    if product is not None:
+        historical_names = list(product.historical_names or [])
+        if source_name not in historical_names and source_name != product.product_name:
+            product.historical_names = [*historical_names, source_name]
+        return product, False
+    product = Product(
+        product_name=record.name,
+        product_code=record.code,
+        product_type="public",
+        historical_names=[source_name],
+    )
+    session.add(product)
+    session.flush()
+    return product, True

@@ -105,7 +105,13 @@ def test_login_catalog_upload_process_and_download(tmp_path: Path) -> None:
             files={
                 "catalog_file": (
                     "catalog.csv",
-                    "product_name,product_code,product_type\n仁桥金选泽源5B,P001,private\n",
+                    "product_name,product_code,product_type\n"
+                    "仁桥金选泽源5B,P001,private\n"
+                    "浑瑾岳桐金选1号B,P002,private\n"
+                    "开思金选港股通1号B,P003,private\n"
+                    "静瑞金选价值灵动1号B,P004,private\n"
+                    "勤辰金选创赢成长1号B,P005,private\n"
+                    "易方达环保主题灵活配置混合A,P006,private\n",
                     "text/csv",
                 )
             },
@@ -180,7 +186,13 @@ def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
             files={
                 "catalog_file": (
                     "catalog.csv",
-                    "product_name,product_code,product_type\n仁桥金选泽源5B,P001,private\n",
+                    "product_name,product_code,product_type\n"
+                    "仁桥金选泽源5B,P001,private\n"
+                    "浑瑾岳桐金选1号B,P002,private\n"
+                    "开思金选港股通1号B,P003,private\n"
+                    "静瑞金选价值灵动1号B,P004,private\n"
+                    "勤辰金选创赢成长1号B,P005,private\n"
+                    "易方达环保主题灵活配置混合A,P006,private\n",
                     "text/csv",
                 )
             },

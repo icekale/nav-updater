@@ -8,10 +8,11 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..catalog import ensure_public_product
 from ..domain.matching import CatalogRecord, match_product, normalize_name
 from ..domain.types import MetricStatus
 from ..excel.template_adapter import TemplateAdapter
-from ..models import NavObservation, Product, RunFile, RunItem, UpdateRun
+from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun
 from ..ocr.engine import OCRService
 from ..ocr.table_parser import OCRMetricRow, extract_metric_rows
 from ..providers.public_fund import PublicFundProvider
@@ -43,15 +44,35 @@ def utcnow() -> datetime:
 
 
 def _product_records(products: Iterable[Product]) -> list[CatalogRecord]:
-    return [
-        CatalogRecord(item.product_name, item.product_code, item.product_type) for item in products
-    ]
+    records: list[CatalogRecord] = []
+    for product in products:
+        records.append(
+            CatalogRecord(product.product_name, product.product_code, product.product_type)
+        )
+        records.extend(
+            CatalogRecord(name, product.product_code, product.product_type)
+            for name in product.historical_names or []
+        )
+    return records
 
 
 def _find_product(products: Iterable[Product], record: CatalogRecord | None) -> Product | None:
     if record is None:
         return None
     return next((item for item in products if item.product_code == record.product_code), None)
+
+
+def _product_by_name(products: Iterable[Product], name: str) -> Product | None:
+    normalized = normalize_name(name)
+    return next(
+        (
+            product
+            for product in products
+            if normalize_name(product.product_name) == normalized
+            or any(normalize_name(alias) == normalized for alias in product.historical_names or [])
+        ),
+        None,
+    )
 
 
 def _find_image_row(
@@ -146,6 +167,7 @@ def process_run(
     ocr_service: OCRService | None = None,
     provider: PublicFundProvider | None = None,
     adapter: TemplateAdapter | None = None,
+    actor_id: int | None = None,
 ) -> UpdateRun:
     run = session.get(UpdateRun, run_id)
     if run is None:
@@ -155,6 +177,7 @@ def process_run(
     run.heartbeat_at = utcnow()
     session.commit()
     try:
+        actor_id = actor_id or run.operator_id
         adapter = adapter or TemplateAdapter()
         provider = provider or PublicFundProvider()
         ocr_service = ocr_service or OCRService()
@@ -165,7 +188,7 @@ def process_run(
         products = session.scalars(select(Product).where(Product.is_active.is_(True))).all()
         screenshot_rows: list[OCRMetricRow] = []
         for image in (item for item in files if item.file_type == "image"):
-            screenshot_rows.extend(extract_metric_rows(ocr_service.recognize(image.storage_path)))
+            screenshot_rows.extend(extract_metric_rows(ocr_service.recognize_tiled(image.storage_path)))
 
         updates: dict[int, dict[str, Decimal | None]] = {}
         stale: dict[int, set[str]] = {}
@@ -179,10 +202,7 @@ def process_run(
                 warnings = warnings or item.row_status != "ready" or bool(stale[item.excel_row])
                 continue
             image_row = _find_image_row(name, screenshot_rows, products)
-            product = next(
-                (p for p in products if normalize_name(p.product_name) == normalize_name(name)),
-                None,
-            )
+            product = _product_by_name(products, name)
             if image_row is not None:
                 statuses = {key: "extracted" for key in image_row.metrics}
                 row_status = "ready" if image_row.confidence >= 0.85 else "needs_review"
@@ -199,6 +219,41 @@ def process_run(
                 if row_status != "ready":
                     warnings = True
                 continue
+            if product is None:
+                try:
+                    record = provider.resolve_by_name(name)
+                    if record is not None:
+                        product, created = ensure_public_product(session, record, name)
+                        products.append(product)
+                        if created:
+                            session.add(
+                                AuditLog(
+                                    actor_id=actor_id,
+                                    action="resolve_public_product",
+                                    object_type="product",
+                                    object_id=str(product.id),
+                                    context={
+                                        "product_code": product.product_code,
+                                        "product_name": product.product_name,
+                                        "source_name": name,
+                                    },
+                                )
+                            )
+                except Exception as exc:
+                    statuses = {key: MetricStatus.FAILED.value for key in ALL_METRICS}
+                    _set_item(
+                        item,
+                        product=None,
+                        source="public_provider",
+                        row_status="failed",
+                        values={},
+                        statuses=statuses,
+                        error=str(exc),
+                    )
+                    updates[item.excel_row] = {}
+                    stale[item.excel_row] = set(ALL_METRICS)
+                    warnings = True
+                    continue
             if product and product.product_type == "public":
                 try:
                     points = provider.fetch_history(product.product_code)
@@ -246,7 +301,7 @@ def process_run(
                 row_status="stale",
                 values={},
                 statuses=statuses,
-                error="没有截图匹配，也没有可用公募产品代码",
+                error="截图未找到对应产品，公募名称未能唯一确认基金代码",
             )
             updates[item.excel_row] = {}
             stale[item.excel_row] = set(ALL_METRICS)
