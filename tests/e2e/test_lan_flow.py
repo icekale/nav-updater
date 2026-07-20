@@ -382,7 +382,26 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
                 original_values={"product_name": "完整产品"},
                 row_status="ready",
             )
-            session.add_all([item, ready_item])
+            partial_item = RunItem(
+                run_id=run.id,
+                excel_row=4,
+                original_values={"product_name": "部分产品"},
+                row_status="partial",
+                metric_values={
+                    "weekly": "0.01",
+                    "mtd": "0.01",
+                    "ytd": "0.01",
+                    "annual_2019": "0.01",
+                    "annual_2020": "0.01",
+                    "annual_2021": "0.01",
+                    "annual_2022": "0.01",
+                    "annual_2023": "0.01",
+                    "annual_2024": "0.01",
+                },
+                metric_status={"annual_2025": "stale", "sharpe": "stale", "max_drawdown": "stale"},
+                error_reason="本次未识别：annual_2025, max_drawdown, sharpe",
+            )
+            session.add_all([item, ready_item, partial_item])
             session.commit()
             run_id = run.id
             item_id = item.id
@@ -393,11 +412,15 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
         assert "识别结果" in preview.text
         assert "待人工审核 1 条" in preview.text
         assert "已识别 1 / 12 项" in preview.text
+        assert "已识别 9 / 12 项" in preview.text
+        assert "部分识别" in preview.text
+        assert "本次未识别" in preview.text
         assert "去审核" in preview.text
 
         review = client.get(f"/updates/{run_id}/review")
         assert "测试私募1号" in review.text
         assert "完整产品" not in review.text
+        assert "部分产品" not in review.text
         assert f'/updates/{run_id}/review?show_all=1' in review.text
         assert 'value="create_private" selected' in review.text
         assert 'class="metric-field missing"' in review.text
@@ -405,6 +428,7 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
         assert "已识别（1 项，可修改）" in review.text
         all_items = client.get(f"/updates/{run_id}/review?show_all=1")
         assert "完整产品" in all_items.text
+        assert "部分产品" in all_items.text
         token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
         saved = client.post(
             f"/updates/{run_id}/items/{item_id}/review",

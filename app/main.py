@@ -55,6 +55,7 @@ ATTENDANCE_LABELS = dict(ATTENDANCE_OPTIONS)
 REVIEWABLE_STATUSES = {"needs_review", "stale", "failed"}
 ITEM_STATUS_LABELS = {
     "ready": "可生成",
+    "partial": "部分识别",
     "needs_review": "待人工审核",
     "stale": "数据待补",
     "failed": "处理失败",

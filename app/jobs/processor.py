@@ -38,6 +38,7 @@ ALL_METRICS = (
     "sharpe",
     "max_drawdown",
 )
+PARTIAL_MINIMUM_CONFIRMED_FIELDS = 9
 
 
 def utcnow() -> datetime:
@@ -200,6 +201,20 @@ def _manual_values(item: RunItem) -> dict[str, Decimal]:
     return values
 
 
+def _image_row_status(
+    row: OCRMetricRow, missing_metrics: set[str]
+) -> tuple[str, str | None]:
+    confirmed_count = len(ALL_METRICS) - len(missing_metrics)
+    if row.confidence < 0.85:
+        return "needs_review", "OCR confidence below threshold"
+    if not missing_metrics:
+        return "ready", None
+    message = f"本次未识别：{', '.join(sorted(missing_metrics))}"
+    if confirmed_count >= PARTIAL_MINIMUM_CONFIRMED_FIELDS:
+        return "partial", message
+    return "needs_review", message
+
+
 def _set_item(
     item: RunItem,
     *,
@@ -277,14 +292,7 @@ def process_run(
                     )
                     for key in ALL_METRICS
                 }
-                review_reasons = []
-                if image_row.confidence < 0.85:
-                    review_reasons.append("OCR confidence below threshold")
-                if missing_metrics:
-                    review_reasons.append(
-                        f"OCR missing metrics: {', '.join(sorted(missing_metrics))}"
-                    )
-                row_status = "needs_review" if review_reasons else "ready"
+                row_status, error_reason = _image_row_status(image_row, missing_metrics)
                 _set_item(
                     item,
                     product=product,
@@ -292,14 +300,14 @@ def process_run(
                     row_status=row_status,
                     values=image_row.metrics,
                     statuses=statuses,
-                    error="; ".join(review_reasons) or None,
+                    error=error_reason,
                 )
                 updates[item.excel_row] = {
                     **image_row.metrics,
                     **dict.fromkeys(confirmed_blank_metrics),
                 }
                 stale[item.excel_row] = missing_metrics
-                warnings = warnings or row_status != "ready"
+                warnings = warnings or row_status == "needs_review"
                 continue
             if product is None:
                 try:

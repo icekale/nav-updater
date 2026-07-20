@@ -12,7 +12,7 @@ from app.db import Base
 from app.domain.matching import CatalogRecord
 from app.domain.types import NavPoint
 from app.excel.template_adapter import TemplateAdapter
-from app.jobs.processor import ALL_METRICS, _find_image_row, process_run
+from app.jobs.processor import ALL_METRICS, _find_image_row, _image_row_status, process_run
 from app.jobs.service import (
     RUN_COMPLETED,
     RUN_PROCESSING,
@@ -388,7 +388,7 @@ def test_process_run_matches_screenshot_without_catalog_product() -> None:
     assert adapter.updates[item.excel_row] == {"weekly": Decimal("0.052")}
 
 
-def test_process_run_routes_partial_ocr_metrics_to_manual_review() -> None:
+def test_process_run_routes_high_coverage_ocr_metrics_to_partial() -> None:
     class CapturingAdapter:
         updates: dict[int, dict[str, Decimal]]
         stale: dict[int, set[str]]
@@ -406,11 +406,25 @@ def test_process_run_routes_partial_ocr_metrics_to_manual_review() -> None:
 
     class FakeTiledOCR:
         def recognize_tiled(self, path: str) -> list[OCRToken]:
+            headers = [
+                "近一周(%)",
+                "MTD(%)",
+                "YTD(%)",
+                "2019(%)",
+                "2020(%)",
+                "2021(%)",
+                "2022(%)",
+                "2023(%)",
+                "2024(%)",
+                "2025(%)",
+                "近一年夏普比",
+                "近一年最大回撤(%)",
+            ]
             return [
                 token("产品名称", 10, 10),
-                token("近一周(%)", 100, 10),
+                *(token(header, (index + 1) * 100, 10) for index, header in enumerate(headers)),
                 token("仁桥金选泽源5B", 10, 50),
-                token("5.20%", 100, 50),
+                *(token("5.20%", (index + 1) * 100, 50) for index in range(9)),
             ]
 
     class FailingProvider:
@@ -461,11 +475,30 @@ def test_process_run_routes_partial_ocr_metrics_to_manual_review() -> None:
         adapter=adapter,
     )
 
-    missing_metrics = set(ALL_METRICS) - {"weekly"}
-    assert item.row_status == "needs_review"
+    missing_metrics = {"annual_2025", "sharpe", "max_drawdown"}
+    assert item.row_status == "partial"
     assert item.metric_status["weekly"] == "extracted"
     assert {key for key, value in item.metric_status.items() if value == "stale"} == missing_metrics
     assert adapter.stale[item.excel_row] == missing_metrics
+    assert adapter.updates[item.excel_row]["weekly"] == Decimal("0.052")
+
+
+def test_image_row_status_routes_low_coverage_rows_to_manual_review() -> None:
+    row = OCRMetricRow(
+        product_name="产品A",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+    )
+    missing_metrics = set(ALL_METRICS) - set(row.metrics)
+
+    assert _image_row_status(row, missing_metrics) == (
+        "needs_review",
+        (
+            "本次未识别：annual_2019, annual_2020, annual_2021, annual_2022, annual_2023, "
+            "annual_2024, annual_2025, max_drawdown, mtd, sharpe, ytd"
+        ),
+    )
 
 
 def test_process_run_clears_confirmed_source_blank_metrics_without_review() -> None:

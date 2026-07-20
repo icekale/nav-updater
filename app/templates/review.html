@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">RUN #{{ run.id }}</p><h1>人工审核</h1><p class="muted">截止日：{{ run.cutoff_date }} · 每条审核独立保存，已保存的数据在重新生成时优先使用。</p></div><a class="button" href="/updates/{{ run.id }}/preview">返回匹配预览</a></div>
-<p class="review-summary">待处理 {{ pending_count }} 条 · {% if show_all %}<a href="/updates/{{ run.id }}/review">仅看待审核</a>{% else %}<a href="/updates/{{ run.id }}/review?show_all=1">显示已识别完整条目</a>{% endif %}</p>
+<p class="review-summary">待处理 {{ pending_count }} 条 · {% if show_all %}<a href="/updates/{{ run.id }}/review">仅看待审核</a>{% else %}<a href="/updates/{{ run.id }}/review?show_all=1">显示全部产品</a>{% endif %}</p>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 {% for row in review_rows %}
 {% set item = row.item %}
