@@ -20,7 +20,9 @@ from app.jobs.service import (
     finish_run,
     metric_values_from_nav,
 )
-from app.models import Product, RunFile, RunItem, UpdateRun, User
+from app.models import AuditLog, Product, RunFile, RunItem, UpdateRun, User
+from app.ocr.engine import OCRToken
+from app.providers.public_fund import PublicFundRecord
 
 
 def test_catalog_import_persists_products_and_run_state() -> None:
@@ -247,3 +249,138 @@ def test_process_run_uses_manual_values_without_calling_provider() -> None:
         "sharpe": Decimal("1.25"),
     }
     assert "mtd" in adapter.stale[item.excel_row]
+
+
+def test_process_run_matches_screenshot_without_catalog_product() -> None:
+    class CapturingAdapter:
+        updates: dict[int, dict[str, Decimal]]
+
+        def apply_updates(self, input_path, output_path, updates, stale) -> None:
+            self.updates = updates
+
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text,
+            ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)),
+            0.99,
+        )
+
+    class FakeTiledOCR:
+        def recognize_tiled(self, path: str) -> list[OCRToken]:
+            return [
+                token("产品名称", 10, 10),
+                token("近一周(%)", 100, 10),
+                token("仁桥金选泽源5B", 10, 50),
+                token("5.20%", 100, 50),
+            ]
+
+    class FailingProvider:
+        def resolve_by_name(self, product_name: str):
+            raise AssertionError(f"provider should not be called for {product_name}")
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    session.add_all(
+        [
+            RunFile(
+                run_id=run.id,
+                file_type="workbook",
+                original_name="template.xlsx",
+                storage_path="/tmp/template.xlsx",
+                sha256="0" * 64,
+            ),
+            RunFile(
+                run_id=run.id,
+                file_type="image",
+                original_name="long.png",
+                storage_path="/tmp/long.png",
+                sha256="1" * 64,
+            ),
+        ]
+    )
+    item = RunItem(
+        run_id=run.id,
+        excel_row=2,
+        original_values={"product_name": "仁桥金选泽源5B"},
+    )
+    session.add(item)
+    session.commit()
+    adapter = CapturingAdapter()
+
+    process_run(
+        session,
+        run.id,
+        ocr_service=FakeTiledOCR(),
+        provider=FailingProvider(),
+        adapter=adapter,
+    )
+
+    assert item.match_source == "image"
+    assert item.product_id is None
+    assert adapter.updates[item.excel_row] == {"weekly": Decimal("0.052")}
+
+
+def test_process_run_resolves_and_persists_unique_public_product() -> None:
+    class CapturingAdapter:
+        updates: dict[int, dict[str, Decimal]]
+
+        def apply_updates(self, input_path, output_path, updates, stale) -> None:
+            self.updates = updates
+
+    class ResolvingProvider:
+        def resolve_by_name(self, product_name: str) -> PublicFundRecord | None:
+            assert product_name == "易方达环保主题灵活配置混合A"
+            return PublicFundRecord("001856", "易方达环保主题混合A")
+
+        def fetch_history(self, product_code: str) -> list[NavPoint]:
+            assert product_code == "001856"
+            return [
+                NavPoint(date(2025, 7, 10), Decimal("100"), "fixture"),
+                NavPoint(date(2026, 7, 10), Decimal("110"), "fixture"),
+                NavPoint(date(2026, 7, 17), Decimal("111"), "fixture"),
+            ]
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    session.add(
+        RunFile(
+            run_id=run.id,
+            file_type="workbook",
+            original_name="template.xlsx",
+            storage_path="/tmp/template.xlsx",
+            sha256="0" * 64,
+        )
+    )
+    item = RunItem(
+        run_id=run.id,
+        excel_row=7,
+        original_values={"product_name": "易方达环保主题灵活配置混合A"},
+    )
+    session.add(item)
+    session.commit()
+    adapter = CapturingAdapter()
+
+    process_run(session, run.id, provider=ResolvingProvider(), adapter=adapter, actor_id=admin.id)
+
+    product = session.query(Product).filter_by(product_code="001856").one()
+    assert product.product_name == "易方达环保主题混合A"
+    assert product.product_type == "public"
+    assert product.historical_names == ["易方达环保主题灵活配置混合A"]
+    assert item.product_id == product.id
+    assert item.match_source == "public_provider"
+    assert adapter.updates[item.excel_row]["weekly"] == Decimal("0.009090909090909090909090909")
+    assert session.query(AuditLog).filter_by(action="resolve_public_product").count() == 1

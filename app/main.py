@@ -563,7 +563,7 @@ def create_app(
         run = session.get(UpdateRun, run_id)
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
-        process_run(session, run_id)
+        process_run(session, run_id, actor_id=user.id)
         session.add(
             AuditLog(
                 actor_id=user.id, action="process", object_type="update_run", object_id=str(run_id)
