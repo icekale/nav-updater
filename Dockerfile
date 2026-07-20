@@ -14,7 +14,8 @@ COPY entrypoint.sh ./entrypoint.sh
 
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" . \
-    && pip uninstall -y opencv-python
+    && pip uninstall -y opencv-python \
+    && pip install --no-cache-dir --force-reinstall --no-deps "opencv-python-headless>=4.10,<5"
 
 RUN chmod +x ./entrypoint.sh
 
