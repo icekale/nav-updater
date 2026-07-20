@@ -25,6 +25,13 @@ def normalize_name(value: str) -> str:
     return text.casefold()
 
 
+def normalize_ocr_name(value: str) -> str:
+    text = value.strip().replace("（", "(").replace("）", ")")
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[\]\}]+$", "", text)
+    return text.casefold()
+
+
 def parse_catalog_rows(rows: Iterable[Mapping[str, str]]) -> list[CatalogRecord]:
     records: list[CatalogRecord] = []
     seen_codes: set[str] = set()

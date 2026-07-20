@@ -5,6 +5,7 @@ from app.domain.matching import (
     CatalogRecord,
     match_product,
     normalize_name,
+    normalize_ocr_name,
     parse_catalog_csv,
 )
 
@@ -16,6 +17,11 @@ def test_normalize_name_removes_spacing_and_full_width_parentheses() -> None:
 def test_normalize_name_removes_ocr_footnote_suffix() -> None:
     assert normalize_name("仁桥金选泽源5B[1]") == normalize_name("仁桥金选泽源5B")
     assert normalize_name("开思金选港股通1号B[]") == normalize_name("开思金选港股通1号B")
+
+
+def test_normalize_ocr_name_removes_only_unmatched_trailing_artifacts() -> None:
+    assert normalize_ocr_name("聚鸣金选高山8号B1]") == "聚鸣金选高山8号b1"
+    assert normalize_ocr_name("产品(稳健)") == "产品(稳健)"
 
 
 def test_catalog_requires_exact_three_columns() -> None:

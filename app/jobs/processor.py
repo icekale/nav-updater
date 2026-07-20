@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..catalog import ensure_public_product
-from ..domain.matching import CatalogRecord, match_product, normalize_name
+from ..domain.matching import CatalogRecord, match_product, normalize_name, normalize_ocr_name
 from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
 from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun
@@ -91,7 +91,7 @@ def _find_image_row(
             if normalize_name(record.product_name) == normalize_name(item_name):
                 return row
             continue
-        if normalize_name(row.product_name) == normalize_name(item_name):
+        if normalize_ocr_name(row.product_name) == normalize_name(item_name):
             return row
         if _is_unique_truncated_chinese_name(item_name, row.product_name, item_names):
             return row
@@ -108,9 +108,8 @@ def _is_unique_truncated_chinese_name(
     ocr_name: str,
     item_names: list[str],
 ) -> bool:
-    ocr_prefix = _leading_chinese(ocr_name)
-    item_prefix = _leading_chinese(item_name)
-    if len(ocr_prefix) < 4 or len(ocr_prefix) >= len(item_prefix):
+    ocr_prefix = _leading_chinese(normalize_ocr_name(ocr_name))
+    if len(ocr_prefix) < 4:
         return False
     candidates = {
         normalize_name(name) for name in item_names if _leading_chinese(name).startswith(ocr_prefix)

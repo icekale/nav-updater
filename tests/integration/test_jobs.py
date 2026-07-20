@@ -580,6 +580,18 @@ def test_find_image_row_matches_unique_truncated_chinese_name() -> None:
     assert _find_image_row(item_name, [row], [], [item_name]) == row
 
 
+def test_find_image_row_matches_a_unique_equal_chinese_prefix() -> None:
+    item_name = "仁桥金选泽源5B"
+    row = OCRMetricRow(
+        product_name="仁桥金选泽源5B1]",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+    )
+
+    assert _find_image_row(item_name, [row], [], [item_name]) == row
+
+
 def test_find_image_row_rejects_ambiguous_truncated_chinese_name() -> None:
     row = OCRMetricRow(
         product_name="浑瑾岳桐B1I1",
@@ -593,6 +605,22 @@ def test_find_image_row_rejects_ambiguous_truncated_chinese_name() -> None:
         [row],
         [],
         ["浑瑾岳桐金选1号B", "浑瑾岳桐金选2号B"],
+    ) is None
+
+
+def test_find_image_row_rejects_an_equal_chinese_prefix_with_two_excel_candidates() -> None:
+    row = OCRMetricRow(
+        product_name="聚鸣金选高山8号B1]",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+    )
+
+    assert _find_image_row(
+        "聚鸣金选高山8号B",
+        [row],
+        [],
+        ["聚鸣金选高山8号B", "聚鸣金选高山3号B"],
     ) is None
 
 
