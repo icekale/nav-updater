@@ -26,6 +26,30 @@ class TextMockTransport(httpx.BaseTransport):
         return httpx.Response(self.status_code, text=self.body, request=request)
 
 
+class PaginatedTransport(httpx.BaseTransport):
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        assert request.url.params["startDate"] == "2018-01-01"
+        assert request.url.params["endDate"]
+        assert request.url.params["pageSize"] == "20"
+        page = int(request.url.params["pageIndex"])
+        rows = {
+            1: [
+                {"FSRQ": f"2026-06-{day:02d}", "LJJZ": "1.1500"}
+                for day in range(1, 21)
+            ],
+            2: [{"FSRQ": "2026-07-10", "LJJZ": "1.1400"}],
+        }[page]
+        return httpx.Response(
+            200,
+            json={"Data": {"LSJZList": rows}, "TotalCount": 21},
+            request=request,
+        )
+
+
 def test_public_provider_normalizes_fixture() -> None:
     payload = json.loads(Path("tests/fixtures/eastmoney_response.json").read_text())
     provider = PublicFundProvider(httpx.Client(transport=MockTransport(payload)))
@@ -87,3 +111,14 @@ def test_public_provider_rejects_catalog_http_error() -> None:
 
     with pytest.raises(ProviderError):
         provider.resolve_by_name("易方达环保主题灵活配置混合A")
+
+
+def test_public_provider_fetches_all_history_pages_with_date_range() -> None:
+    transport = PaginatedTransport()
+    provider = PublicFundProvider(httpx.Client(transport=transport))
+
+    points = provider.fetch_history("001856")
+
+    assert len(points) == 21
+    assert points[-1].date.isoformat() == "2026-07-10"
+    assert len(transport.requests) == 2

@@ -27,6 +27,8 @@ class PublicFundRecord:
 class PublicFundProvider:
     endpoint = "https://api.fund.eastmoney.com/f10/lsjz"
     catalog_endpoint = "https://fund.eastmoney.com/js/fundcode_search.js"
+    history_start_date = "2018-01-01"
+    history_page_size = 20
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self.client = client or httpx.Client(
@@ -46,16 +48,7 @@ class PublicFundProvider:
         return _unique_record(aliases)
 
     def fetch_history(self, product_code: str) -> list[NavPoint]:
-        try:
-            response = self.client.get(
-                self.endpoint,
-                params={"fundCode": product_code, "pageIndex": 1, "pageSize": 1000},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ProviderError(f"failed to fetch public fund {product_code}") from exc
-        rows = self._extract_rows(payload, product_code)
+        rows = self._fetch_history_rows(product_code)
         points: list[NavPoint] = []
         imported_at = datetime.now(UTC).isoformat()
         for row in rows:
@@ -67,6 +60,36 @@ class PublicFundProvider:
             if nav > 0:
                 points.append(NavPoint(day, nav, f"eastmoney:{product_code}:{imported_at}"))
         return points
+
+    def _fetch_history_rows(self, product_code: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        page_index = 1
+        while True:
+            try:
+                response = self.client.get(
+                    self.endpoint,
+                    params={
+                        "fundCode": product_code,
+                        "pageIndex": page_index,
+                        "pageSize": self.history_page_size,
+                        "startDate": self.history_start_date,
+                        "endDate": date.today().isoformat(),
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise ProviderError(f"failed to fetch public fund {product_code}") from exc
+            page_rows = self._extract_rows(payload, product_code)
+            rows.extend(page_rows)
+            total = payload.get("TotalCount") if isinstance(payload, dict) else None
+            if (
+                not isinstance(total, int)
+                or len(rows) >= total
+                or len(page_rows) < self.history_page_size
+            ):
+                return rows
+            page_index += 1
 
     def _catalog_records(self) -> list[PublicFundRecord]:
         if self._catalog is not None:
