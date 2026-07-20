@@ -99,6 +99,35 @@ def test_extract_metric_rows_assigns_a_remaining_cell_to_its_own_column() -> Non
     assert rows[0].metrics == {"mtd": Decimal("0.005")}
 
 
+def test_extract_metric_rows_uses_each_repeated_header_layout() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("产品名称", 10, 10),
+            token("近一周(%)", 100, 10),
+            token("MTD(%)", 200, 10),
+            token("产品A", 10, 50),
+            token("1.00%", 100, 50),
+            token("2.00%", 200, 50),
+            token("产品名称", 710, 100),
+            token("近一周(%)", 800, 100),
+            token("MTD(%)", 900, 100),
+            token("产品B", 710, 140),
+            token("3.00%", 800, 140),
+            token("4.00%", 900, 140),
+        ]
+    )
+
+    assert [(row.product_name, row.metrics) for row in rows] == [
+        ("产品A", {"weekly": Decimal("0.01"), "mtd": Decimal("0.02")} ),
+        ("产品B", {"weekly": Decimal("0.03"), "mtd": Decimal("0.04")} ),
+    ]
+
+
 def test_extract_metric_rows_ignores_noise_before_a_valid_mtd_value() -> None:
     def token(text: str, left: float, top: float) -> OCRToken:
         return OCRToken(

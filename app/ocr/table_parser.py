@@ -123,57 +123,69 @@ def _header_key(text: str) -> str | None:
 
 def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
     rows = group_rows(tokens)
-    header_index = -1
-    headers: dict[str, float] = {}
+    header_blocks = _header_blocks(rows)
+    if not header_blocks:
+        return []
+
+    results: list[OCRMetricRow] = []
+    for block_index, (header_index, headers) in enumerate(header_blocks):
+        next_header_index = (
+            header_blocks[block_index + 1][0]
+            if block_index + 1 < len(header_blocks)
+            else len(rows)
+        )
+        for row in rows[header_index + 1 : next_header_index]:
+            if not row.cells:
+                continue
+            product_cell = _nearest_cell(row.cells, headers.get("product_name", row.cells[0].left))
+            if not product_cell or _header_key(product_cell.text):
+                continue
+            code_cell = (
+                _nearest_cell(row.cells, headers["product_code"])
+                if "product_code" in headers
+                else None
+            )
+            metrics: dict[str, Decimal] = {}
+            confidence = product_cell.confidence
+            metric_cells = _metric_cells_by_header(
+                row.cells,
+                [(key, left) for key, left in headers.items() if key in METRIC_KEYS],
+                {product_cell, code_cell} if code_cell is not None else {product_cell},
+            )
+            for key, left in headers.items():
+                if key not in METRIC_KEYS:
+                    continue
+                cell = metric_cells.get(key)
+                if not cell:
+                    continue
+                try:
+                    metrics[key] = _parse_metric_cell(key, cell.text)
+                except ValueError:
+                    continue
+                confidence = min(confidence, cell.confidence)
+            if metrics:
+                results.append(
+                    OCRMetricRow(
+                        product_name=product_cell.text,
+                        product_code=code_cell.text if code_cell else None,
+                        metrics=metrics,
+                        confidence=confidence,
+                    )
+                )
+    return results
+
+
+def _header_blocks(rows: list[ParsedRow]) -> list[tuple[int, dict[str, float]]]:
+    blocks: list[tuple[int, dict[str, float]]] = []
     for index, row in enumerate(rows):
         candidates = [(_header_key(cell.text), cell.left) for cell in row.cells]
         known = [(key, left) for key, left in candidates if key]
         known_keys = {key for key, _ in known}
         if "product_name" in known_keys and len(known_keys & METRIC_KEYS) >= 1:
-            header_index = index
             headers = dict(known)
-            break
-    if header_index < 0:
-        return []
-    headers.update(_supplement_headers(rows, header_index, headers))
-    results: list[OCRMetricRow] = []
-    for row in rows[header_index + 1 :]:
-        if not row.cells:
-            continue
-        product_cell = _nearest_cell(row.cells, headers.get("product_name", row.cells[0].left))
-        if not product_cell or _header_key(product_cell.text):
-            continue
-        code_cell = (
-            _nearest_cell(row.cells, headers["product_code"]) if "product_code" in headers else None
-        )
-        metrics: dict[str, Decimal] = {}
-        confidence = product_cell.confidence
-        metric_cells = _metric_cells_by_header(
-            row.cells,
-            [(key, left) for key, left in headers.items() if key in METRIC_KEYS],
-            {product_cell, code_cell} if code_cell is not None else {product_cell},
-        )
-        for key, left in headers.items():
-            if key not in METRIC_KEYS:
-                continue
-            cell = metric_cells.get(key)
-            if not cell:
-                continue
-            try:
-                metrics[key] = _parse_metric_cell(key, cell.text)
-            except ValueError:
-                continue
-            confidence = min(confidence, cell.confidence)
-        if metrics:
-            results.append(
-                OCRMetricRow(
-                    product_name=product_cell.text,
-                    product_code=code_cell.text if code_cell else None,
-                    metrics=metrics,
-                    confidence=confidence,
-                )
-            )
-    return results
+            headers.update(_supplement_headers(rows, index, headers))
+            blocks.append((index, headers))
+    return blocks
 
 
 def _supplement_headers(
