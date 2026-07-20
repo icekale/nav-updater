@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from ..domain.metrics import calculate_max_drawdown, calculate_returns, calculate_sharpe
@@ -50,6 +50,7 @@ def create_run(
     cutoff_date: date,
     workbook_path: str | Path,
     image_paths: Iterable[str | Path],
+    image_original_names: Mapping[str, str] | None = None,
     template: TemplateAdapter | None = None,
 ) -> UpdateRun:
     template = template or TemplateAdapter()
@@ -68,11 +69,12 @@ def create_run(
     )
     for image_path in image_paths:
         image_path = Path(image_path)
+        original_name = (image_original_names or {}).get(str(image_path), image_path.name)
         session.add(
             RunFile(
                 run_id=run.id,
                 file_type="image",
-                original_name=image_path.name,
+                original_name=original_name,
                 storage_path=str(image_path),
                 sha256=sha256_file(image_path),
             )
@@ -115,6 +117,38 @@ def claim_next_run(session: Session, now: datetime | None = None) -> UpdateRun |
     run.heartbeat_at = now
     session.commit()
     return run
+
+
+def requeue_run(session: Session, run_id: int) -> UpdateRun | None:
+    result = session.execute(
+        update(UpdateRun)
+        .where(UpdateRun.id == run_id, UpdateRun.status != RUN_PROCESSING)
+        .values(
+            status=RUN_READY,
+            started_at=None,
+            finished_at=None,
+            heartbeat_at=None,
+            output_path=None,
+            error_message=None,
+        )
+    )
+    if result.rowcount != 1:
+        session.rollback()
+        return None
+    session.commit()
+    return session.get(UpdateRun, run_id)
+
+
+def lock_run_item(session: Session, run_id: int, item_id: int) -> tuple[UpdateRun, RunItem] | None:
+    run = session.scalar(select(UpdateRun).where(UpdateRun.id == run_id).with_for_update())
+    if run is None:
+        return None
+    item = session.scalar(
+        select(RunItem)
+        .where(RunItem.id == item_id, RunItem.run_id == run_id)
+        .with_for_update()
+    )
+    return (run, item) if item is not None else None
 
 
 def heartbeat(session: Session, run_id: int, now: datetime | None = None) -> None:

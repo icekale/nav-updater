@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..catalog import ensure_public_product
 from ..domain.matching import CatalogRecord, match_product, normalize_name
-from ..domain.types import MetricStatus
+from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
 from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun
 from ..ocr.engine import OCRService
@@ -91,14 +91,26 @@ def _find_image_row(
 
 
 def _store_observations(session: Session, product: Product, points) -> None:
-    for point in points:
-        existing = session.scalar(
-            select(NavObservation).where(
-                NavObservation.product_id == product.id,
-                NavObservation.nav_date == point.date,
-                NavObservation.source_kind == "eastmoney",
-            )
+    points = list(points)
+    if not points:
+        return
+    existing_by_date: dict = {}
+    dates = list({point.date for point in points})
+    for index in range(0, len(dates), 500):
+        existing_by_date.update(
+            {
+                observation.nav_date: observation
+                for observation in session.scalars(
+                    select(NavObservation).where(
+                        NavObservation.product_id == product.id,
+                        NavObservation.nav_date.in_(dates[index : index + 500]),
+                        NavObservation.source_kind == "eastmoney",
+                    )
+                ).all()
+            }
         )
+    for point in points:
+        existing = existing_by_date.get(point.date)
         if existing:
             existing.cumulative_nav = point.value
             existing.source_ref = point.source
@@ -112,6 +124,25 @@ def _store_observations(session: Session, product: Product, points) -> None:
                     source_ref=point.source,
                 )
             )
+
+
+def _public_observations(session: Session, product: Product) -> list[NavPoint]:
+    observations = session.scalars(
+        select(NavObservation)
+        .where(
+            NavObservation.product_id == product.id,
+            NavObservation.source_kind == "eastmoney",
+        )
+        .order_by(NavObservation.nav_date)
+    ).all()
+    return [
+        NavPoint(
+            observation.nav_date,
+            observation.cumulative_nav,
+            observation.source_ref or "eastmoney:cached",
+        )
+        for observation in observations
+    ]
 
 
 def _stale_metrics(statuses: dict[str, str]) -> set[str]:
@@ -256,8 +287,16 @@ def process_run(
                     continue
             if product and product.product_type == "public":
                 try:
-                    points = provider.fetch_history(product.product_code)
-                    _store_observations(session, product, points)
+                    cached_points = _public_observations(session, product)
+                    start_date = max((point.date for point in cached_points), default=None)
+                    fetched_points = provider.fetch_history(
+                        product.product_code,
+                        start_date=start_date,
+                    )
+                    _store_observations(session, product, fetched_points)
+                    points_by_date = {point.date: point for point in cached_points}
+                    points_by_date.update({point.date: point for point in fetched_points})
+                    points = list(points_by_date.values())
                     values, statuses = metric_values_from_nav(points, run.cutoff_date, "public")
                     row_status = (
                         "ready"

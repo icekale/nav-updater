@@ -148,10 +148,15 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
         )
         metrics: dict[str, Decimal] = {}
         confidence = product_cell.confidence
+        metric_cells = _metric_cells_by_header(
+            row.cells,
+            [(key, left) for key, left in headers.items() if key in METRIC_KEYS],
+            {product_cell, code_cell} if code_cell is not None else {product_cell},
+        )
         for key, left in headers.items():
             if key not in METRIC_KEYS:
                 continue
-            cell = _nearest_cell(row.cells, left, excluded={product_cell, code_cell})
+            cell = metric_cells.get(key)
             if not cell:
                 continue
             try:
@@ -213,3 +218,19 @@ def _nearest_cell(
     excluded = excluded or set()
     candidates = [cell for cell in cells if cell not in excluded]
     return min(candidates, key=lambda cell: abs(cell.left - left), default=None)
+
+
+def _metric_cells_by_header(
+    cells: tuple[ParsedCell, ...],
+    headers: list[tuple[str, float]],
+    excluded: set[ParsedCell],
+) -> dict[str, ParsedCell]:
+    assigned: dict[str, ParsedCell] = {}
+    for cell in cells:
+        if cell in excluded:
+            continue
+        key, left = min(headers, key=lambda item: (abs(cell.left - item[1]), item[1]))
+        existing = assigned.get(key)
+        if existing is None or abs(cell.left - left) < abs(existing.left - left):
+            assigned[key] = cell
+    return assigned

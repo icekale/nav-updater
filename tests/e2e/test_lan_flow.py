@@ -1,4 +1,5 @@
 import re
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings
 from app.db import Base
 from app.main import create_app
-from app.models import AuditLog, Meeting
+from app.models import AuditLog, Meeting, Product, RunFile, RunItem, UpdateRun, User
 
 
 def meeting_workbook_bytes() -> bytes:
@@ -71,7 +72,7 @@ def test_login_page_is_available() -> None:
     assert "登录" in response.text
 
 
-def test_login_catalog_upload_process_and_download(tmp_path: Path) -> None:
+def test_login_catalog_upload_and_queue_run(tmp_path: Path) -> None:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -146,10 +147,192 @@ def test_login_catalog_upload_process_and_download(tmp_path: Path) -> None:
         )
         assert processed.status_code == 303
         final_page = client.get(created.headers["location"])
-        assert "completed_with_warnings" in final_page.text
+        assert "已进入后台处理队列" in final_page.text
         downloaded = client.get(created.headers["location"].replace("/preview", "/download"))
-        assert downloaded.status_code == 200
-        assert downloaded.headers["content-type"].startswith("application/vnd.openxmlformats")
+        assert downloaded.status_code == 404
+
+
+def test_upload_keeps_same_named_images_separate(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        new_page = client.get("/updates/new")
+        token = re.search(r'name="token" value="([^"]+)"', new_page.text).group(1)
+        created = client.post(
+            "/updates/new",
+            data={"token": token, "cutoff_date": "2026-07-17"},
+            files=[
+                (
+                    "workbook",
+                    (
+                        "template.xlsx",
+                        Path("tests/fixtures/net_value_template.xlsx").read_bytes(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ),
+                ),
+                ("images", ("snapshot.png", b"first image", "image/png")),
+                ("images", ("snapshot.png", b"second image", "image/png")),
+            ],
+            follow_redirects=False,
+        )
+        run_id = int(re.search(r"/updates/(\d+)/preview", created.headers["location"]).group(1))
+
+    session = factory()
+    try:
+        images = session.query(RunFile).filter_by(run_id=run_id, file_type="image").all()
+        assert len(images) == 2
+        assert len({image.storage_path for image in images}) == 2
+        assert {image.original_name for image in images} == {"snapshot.png"}
+        assert {Path(image.storage_path).read_bytes() for image in images} == {
+            b"first image",
+            b"second image",
+        }
+    finally:
+        session.close()
+
+
+def test_regenerate_requeues_completed_run_for_worker(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            run = UpdateRun(
+                operator_id=admin.id,
+                cutoff_date=date(2026, 7, 17),
+                status="completed",
+                output_path=str(tmp_path / "old-result.xlsx"),
+            )
+            session.add(run)
+            session.commit()
+            run_id = run.id
+        finally:
+            session.close()
+
+        preview = client.get(f"/updates/{run_id}/preview")
+        token = re.search(r'name="token" value="([^"]+)"', preview.text).group(1)
+        requested = client.post(
+            f"/updates/{run_id}/process",
+            data={"token": token},
+            follow_redirects=False,
+        )
+        assert requested.status_code == 303
+
+    session = factory()
+    try:
+        run = session.get(UpdateRun, run_id)
+        assert run.status == "uploaded"
+        assert run.output_path is None
+    finally:
+        session.close()
+
+
+def test_manual_review_is_rejected_while_run_is_processing(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            product = Product(product_name="产品A", product_code="P001", product_type="private")
+            session.add(product)
+            session.flush()
+            run = UpdateRun(
+                operator_id=admin.id,
+                cutoff_date=date(2026, 7, 17),
+                status="processing",
+            )
+            session.add(run)
+            session.flush()
+            item = RunItem(run_id=run.id, excel_row=2, original_values={"product_name": "产品A"})
+            session.add(item)
+            session.commit()
+            run_id = run.id
+            item_id = item.id
+            product_id = product.id
+        finally:
+            session.close()
+
+        review = client.get(f"/updates/{run_id}/review")
+        token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
+        reviewed = client.post(
+            f"/updates/{run_id}/items/{item_id}/review",
+            data={
+                "token": token,
+                "product_id": product_id,
+                "weekly": "12.34",
+                "review_note": "人工核对",
+            },
+            follow_redirects=False,
+        )
+
+    assert reviewed.status_code == 409
+    session = factory()
+    try:
+        assert session.get(RunItem, item_id).match_source == "none"
+    finally:
+        session.close()
 
 
 def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
@@ -246,7 +429,7 @@ def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
         )
         assert processed.status_code == 303
         downloaded = client.get(f"/updates/{run_id}/download")
-        assert downloaded.status_code == 200
+        assert downloaded.status_code == 404
 
     session = factory()
     try:

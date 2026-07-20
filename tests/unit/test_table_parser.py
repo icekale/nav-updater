@@ -61,6 +61,44 @@ def test_extract_metric_rows_from_header_and_data_tokens() -> None:
     assert rows[0].metrics == {"weekly": Decimal("0.052"), "sharpe": Decimal("1.25")}
 
 
+def test_extract_metric_rows_does_not_reuse_one_cell_for_missing_columns() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("产品名称", 10, 10),
+            token("近一周(%)", 100, 10),
+            token("MTD(%)", 200, 10),
+            token("产品A", 10, 50),
+            token("5.20%", 100, 50),
+        ]
+    )
+
+    assert rows[0].metrics == {"weekly": Decimal("0.052")}
+
+
+def test_extract_metric_rows_assigns_a_remaining_cell_to_its_own_column() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("产品名称", 10, 10),
+            token("近一周(%)", 100, 10),
+            token("MTD(%)", 200, 10),
+            token("产品A", 10, 50),
+            token("0.50%", 200, 50),
+        ]
+    )
+
+    assert rows[0].metrics == {"mtd": Decimal("0.005")}
+
+
 def test_extract_metric_rows_recovers_split_risk_headers_and_ytd_column() -> None:
     def token(text: str, left: float, top: float) -> OCRToken:
         return OCRToken(

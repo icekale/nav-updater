@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,12 +28,13 @@ class TextMockTransport(httpx.BaseTransport):
 
 
 class PaginatedTransport(httpx.BaseTransport):
-    def __init__(self) -> None:
+    def __init__(self, start_date: str = "2018-01-01") -> None:
         self.requests: list[httpx.Request] = []
+        self.start_date = start_date
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        assert request.url.params["startDate"] == "2018-01-01"
+        assert request.url.params["startDate"] == self.start_date
         assert request.url.params["endDate"]
         assert request.url.params["pageSize"] == "20"
         page = int(request.url.params["pageIndex"])
@@ -121,4 +123,13 @@ def test_public_provider_fetches_all_history_pages_with_date_range() -> None:
 
     assert len(points) == 21
     assert points[-1].date.isoformat() == "2026-07-10"
+    assert len(transport.requests) == 2
+
+
+def test_public_provider_fetches_history_from_requested_start_date() -> None:
+    transport = PaginatedTransport(start_date="2026-07-10")
+    provider = PublicFundProvider(httpx.Client(transport=transport))
+
+    provider.fetch_history("001856", start_date=date(2026, 7, 10))
+
     assert len(transport.requests) == 2

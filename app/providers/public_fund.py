@@ -47,8 +47,11 @@ class PublicFundProvider:
         aliases = [record for record in records if _fund_name_key(record.name) == alias_key]
         return _unique_record(aliases)
 
-    def fetch_history(self, product_code: str) -> list[NavPoint]:
-        rows = self._fetch_history_rows(product_code)
+    def fetch_history(self, product_code: str, start_date: date | None = None) -> list[NavPoint]:
+        rows = self._fetch_history_rows(
+            product_code,
+            start_date or date.fromisoformat(self.history_start_date),
+        )
         points: list[NavPoint] = []
         imported_at = datetime.now(UTC).isoformat()
         for row in rows:
@@ -61,7 +64,7 @@ class PublicFundProvider:
                 points.append(NavPoint(day, nav, f"eastmoney:{product_code}:{imported_at}"))
         return points
 
-    def _fetch_history_rows(self, product_code: str) -> list[dict[str, Any]]:
+    def _fetch_history_rows(self, product_code: str, start_date: date) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         page_index = 1
         while True:
@@ -72,7 +75,7 @@ class PublicFundProvider:
                         "fundCode": product_code,
                         "pageIndex": page_index,
                         "pageSize": self.history_page_size,
-                        "startDate": self.history_start_date,
+                        "startDate": start_date.isoformat(),
                         "endDate": date.today().isoformat(),
                     },
                 )

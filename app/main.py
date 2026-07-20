@@ -27,16 +27,16 @@ from .catalog import import_catalog
 from .config import Settings, ensure_data_dir, get_settings
 from .db import SessionLocal, get_session
 from .domain.matching import parse_catalog_csv
-from .jobs.processor import ALL_METRICS, process_run
+from .jobs.processor import ALL_METRICS
 from .jobs.review import (
     METRIC_FIELDS,
     ManualReviewError,
     formatted_metric_values,
     save_manual_review,
 )
-from .jobs.service import create_run, resolve_item
+from .jobs.service import create_run, lock_run_item, requeue_run, resolve_item
 from .meetings import MeetingImportError, import_meetings
-from .models import AuditLog, Meeting, Product, RunItem, UpdateRun, User
+from .models import AuditLog, Meeting, Product, UpdateRun, User
 
 ATTENDANCE_OPTIONS = (
     ("unplanned", "未安排"),
@@ -406,19 +406,23 @@ def create_app(
         with workbook_path.open("wb") as handle:
             shutil.copyfileobj(workbook.file, handle)
         image_paths: list[Path] = []
+        image_original_names: dict[str, str] = {}
         for image in images:
             if not image.filename:
                 continue
-            image_path = run_dir / Path(image.filename).name
+            source_name = Path(image.filename).name
+            image_path = run_dir / f"{uuid.uuid4().hex}{Path(source_name).suffix.lower()}"
             with image_path.open("wb") as handle:
                 shutil.copyfileobj(image.file, handle)
             image_paths.append(image_path)
+            image_original_names[str(image_path)] = source_name
         run = create_run(
             session,
             operator_id=user.id,
             cutoff_date=cutoff,
             workbook_path=workbook_path,
             image_paths=image_paths,
+            image_original_names=image_original_names,
         )
         session.add(
             AuditLog(
@@ -507,10 +511,19 @@ def create_app(
         session: Session = Depends(get_session),
     ):
         require_csrf(request, token)
-        run = session.get(UpdateRun, run_id)
-        item = session.get(RunItem, item_id)
-        if run is None or item is None or item.run_id != run_id:
+        locked = lock_run_item(session, run_id, item_id)
+        if locked is None:
             return HTMLResponse("条目不存在", status_code=404)
+        run, item = locked
+        if run.status == "processing":
+            return review_response(
+                request,
+                run,
+                session,
+                user,
+                error="批次正在处理中，请等待完成后再保存审核",
+                status_code=409,
+            )
         product = session.scalar(
             select(Product).where(Product.id == product_id, Product.is_active.is_(True))
         )
@@ -563,10 +576,12 @@ def create_app(
         run = session.get(UpdateRun, run_id)
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
-        process_run(session, run_id, actor_id=user.id)
+        queued = requeue_run(session, run_id)
+        if queued is None:
+            raise HTTPException(status_code=409, detail="批次正在处理中")
         session.add(
             AuditLog(
-                actor_id=user.id, action="process", object_type="update_run", object_id=str(run_id)
+                actor_id=user.id, action="queue", object_type="update_run", object_id=str(run_id)
             )
         )
         session.commit()
@@ -583,9 +598,12 @@ def create_app(
         session: Session = Depends(get_session),
     ):
         require_csrf(request, token)
-        item = session.get(RunItem, item_id)
-        if item is None or item.run_id != run_id:
+        locked = lock_run_item(session, run_id, item_id)
+        if locked is None:
             return HTMLResponse("条目不存在", status_code=404)
+        run, item = locked
+        if run.status == "processing":
+            return HTMLResponse("批次正在处理中，请等待完成后再操作", status_code=409)
         if action == "skip":
             resolve_item(
                 session,

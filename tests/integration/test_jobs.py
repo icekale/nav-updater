@@ -18,9 +18,10 @@ from app.jobs.service import (
     claim_next_run,
     create_run,
     finish_run,
+    lock_run_item,
     metric_values_from_nav,
 )
-from app.models import AuditLog, Product, RunFile, RunItem, UpdateRun, User
+from app.models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun, User
 from app.ocr.engine import OCRToken
 from app.providers.public_fund import PublicFundRecord
 
@@ -339,8 +340,13 @@ def test_process_run_resolves_and_persists_unique_public_product() -> None:
             assert product_name == "易方达环保主题灵活配置混合A"
             return PublicFundRecord("001856", "易方达环保主题混合A")
 
-        def fetch_history(self, product_code: str) -> list[NavPoint]:
+        def fetch_history(
+            self,
+            product_code: str,
+            start_date: date | None = None,
+        ) -> list[NavPoint]:
             assert product_code == "001856"
+            assert start_date is None
             return [
                 NavPoint(date(2025, 7, 10), Decimal("100"), "fixture"),
                 NavPoint(date(2026, 7, 10), Decimal("110"), "fixture"),
@@ -384,3 +390,97 @@ def test_process_run_resolves_and_persists_unique_public_product() -> None:
     assert item.match_source == "public_provider"
     assert adapter.updates[item.excel_row]["weekly"] == Decimal("0.009090909090909090909090909")
     assert session.query(AuditLog).filter_by(action="resolve_public_product").count() == 1
+
+
+def test_process_run_fetches_public_history_since_latest_observation() -> None:
+    class CapturingAdapter:
+        def apply_updates(self, input_path, output_path, updates, stale) -> None:
+            pass
+
+    class CapturingProvider:
+        requested_start_date: date | None = None
+
+        def fetch_history(
+            self,
+            product_code: str,
+            start_date: date | None = None,
+        ) -> list[NavPoint]:
+            assert product_code == "001856"
+            self.requested_start_date = start_date
+            return [NavPoint(date(2026, 7, 17), Decimal("111"), "fixture")]
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    product = Product(
+        product_name="易方达环保主题混合A",
+        product_code="001856",
+        product_type="public",
+    )
+    session.add_all([admin, product])
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    session.add_all(
+        [
+            RunFile(
+                run_id=run.id,
+                file_type="workbook",
+                original_name="template.xlsx",
+                storage_path="/tmp/template.xlsx",
+                sha256="0" * 64,
+            ),
+            RunItem(
+                run_id=run.id,
+                excel_row=7,
+                original_values={"product_name": "易方达环保主题混合A"},
+            ),
+            NavObservation(
+                product_id=product.id,
+                nav_date=date(2026, 7, 10),
+                cumulative_nav=Decimal("110"),
+                source_kind="eastmoney",
+                source_ref="fixture",
+            ),
+        ]
+    )
+    session.commit()
+    provider = CapturingProvider()
+
+    process_run(
+        session,
+        run.id,
+        provider=provider,
+        ocr_service=object(),
+        adapter=CapturingAdapter(),
+    )
+
+    assert provider.requested_start_date == date(2026, 7, 10)
+    assert (
+        session.query(NavObservation)
+        .filter_by(product_id=product.id, nav_date=date(2026, 7, 17), source_kind="eastmoney")
+        .count()
+        == 1
+    )
+
+
+def test_lock_run_item_requests_row_locks() -> None:
+    run = object()
+    item = object()
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.statements = []
+            self.results = [run, item]
+
+        def scalar(self, statement):
+            self.statements.append(statement)
+            return self.results.pop(0)
+
+    session = RecordingSession()
+
+    assert lock_run_item(session, run_id=3, item_id=9) == (run, item)
+    assert len(session.statements) == 2
+    assert all(statement._for_update_arg is not None for statement in session.statements)
