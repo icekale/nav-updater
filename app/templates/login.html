@@ -6,7 +6,7 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="/login">
     <input type="hidden" name="token" value="{{ csrf_token }}">
-    <label>账号<input name="username" autocomplete="username" required></label>
+    <label>账号<input type="text" name="username" autocomplete="username" required></label>
     <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
     <button type="submit" class="primary">进入工具</button>
   </form>
