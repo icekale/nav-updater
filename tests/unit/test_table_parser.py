@@ -59,3 +59,61 @@ def test_extract_metric_rows_from_header_and_data_tokens() -> None:
     assert len(rows) == 1
     assert rows[0].product_name == "产品A"
     assert rows[0].metrics == {"weekly": Decimal("0.052"), "sharpe": Decimal("1.25")}
+
+
+def test_extract_metric_rows_recovers_split_risk_headers_and_ytd_column() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("近一年", 1400, 80),
+            token("近一年", 1600, 80),
+            token("历史", 1800, 80),
+            token("产品名称", 10, 100),
+            token("近一周(%)", 100, 100),
+            token("MTD(%)", 200, 100),
+            token("(%)1A", 400, 100),
+            token("2025(%)", 500, 100),
+            token("2024(%)", 600, 100),
+            token("2023(%)", 700, 100),
+            token("2022(%)", 800, 100),
+            token("2021(%)", 900, 100),
+            token("2020(%)", 1000, 100),
+            token("2019(%)", 1100, 100),
+            token("最大回撤(%)", 1600, 130),
+            token("最大回撤(%)", 1800, 130),
+            token("产品A", 10, 200),
+            token("5.20%", 100, 200),
+            token("0.50%", 200, 200),
+            token("2.68%", 300, 200),
+            token("-12.95%", 400, 200),
+            token("16.83%", 500, 200),
+            token("19.10%", 600, 200),
+            token("-4.01%", 700, 200),
+            token("0.80%", 800, 200),
+            token("37.20%", 900, 200),
+            token("34.24%", 1000, 200),
+            token("31.52%", 1100, 200),
+            token("-0.52", 1400, 200),
+            token("-21.28%", 1600, 200),
+            token("-32.97%", 1800, 200),
+        ]
+    )
+
+    assert rows[0].metrics == {
+        "weekly": Decimal("0.052"),
+        "mtd": Decimal("0.005"),
+        "ytd": Decimal("0.0268"),
+        "annual_2025": Decimal("0.1683"),
+        "annual_2024": Decimal("0.191"),
+        "annual_2023": Decimal("-0.0401"),
+        "annual_2022": Decimal("0.008"),
+        "annual_2021": Decimal("0.372"),
+        "annual_2020": Decimal("0.3424"),
+        "annual_2019": Decimal("0.3152"),
+        "sharpe": Decimal("-0.52"),
+        "max_drawdown": Decimal("-0.2128"),
+    }

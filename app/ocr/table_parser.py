@@ -7,6 +7,21 @@ from decimal import Decimal, InvalidOperation
 
 from .engine import OCRToken
 
+METRIC_KEYS = {
+    "weekly",
+    "mtd",
+    "ytd",
+    "annual_2019",
+    "annual_2020",
+    "annual_2021",
+    "annual_2022",
+    "annual_2023",
+    "annual_2024",
+    "annual_2025",
+    "sharpe",
+    "max_drawdown",
+}
+
 
 @dataclass(frozen=True)
 class ParsedCell:
@@ -94,6 +109,14 @@ def _header_key(text: str) -> str | None:
         return "sharpe"
     if value.startswith("近一年") and "回撤" in value:
         return "max_drawdown"
+    if value in {"(%)1a", "(%)ia"}:
+        return "one_year_return"
+    if value == "近一年":
+        return "near_one_label"
+    if "最大回撤" in value:
+        return "max_drawdown_label"
+    if value.startswith("历史"):
+        return "history_label"
     match = re.match(r"^(2019|2020|2021|2022|2023|2024|2025)", value)
     return f"annual_{match.group(1)}" if match else None
 
@@ -105,12 +128,14 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
     for index, row in enumerate(rows):
         candidates = [(_header_key(cell.text), cell.left) for cell in row.cells]
         known = [(key, left) for key, left in candidates if key]
-        if len(known) >= 2:
+        known_keys = {key for key, _ in known}
+        if "product_name" in known_keys and len(known_keys & METRIC_KEYS) >= 1:
             header_index = index
             headers = dict(known)
             break
     if header_index < 0:
         return []
+    headers.update(_supplement_headers(rows, header_index, headers))
     results: list[OCRMetricRow] = []
     for row in rows[header_index + 1 :]:
         if not row.cells:
@@ -124,7 +149,7 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
         metrics: dict[str, Decimal] = {}
         confidence = product_cell.confidence
         for key, left in headers.items():
-            if key in {"product_name", "product_code"}:
+            if key not in METRIC_KEYS:
                 continue
             cell = _nearest_cell(row.cells, left, excluded={product_cell, code_cell})
             if not cell:
@@ -146,6 +171,40 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
                 )
             )
     return results
+
+
+def _supplement_headers(
+    rows: list[ParsedRow], header_index: int, headers: dict[str, float]
+) -> dict[str, float]:
+    supplements: dict[str, float] = {}
+    nearby_rows = rows[max(0, header_index - 1) : header_index + 2]
+    near_one = [
+        cell.left
+        for row in nearby_rows
+        for cell in row.cells
+        if _header_key(cell.text) == "near_one_label"
+    ]
+    drawdowns = [
+        cell.left
+        for row in nearby_rows
+        for cell in row.cells
+        if _header_key(cell.text) == "max_drawdown_label"
+    ]
+    if "mtd" in headers and "one_year_return" in headers and "ytd" not in headers:
+        supplements["ytd"] = (headers["mtd"] + headers["one_year_return"]) / 2
+
+    paired_near_one = {
+        left
+        for left in near_one
+        if any(abs(left - drawdown) <= 120 for drawdown in drawdowns)
+    }
+    if "sharpe" not in headers:
+        sharpe_columns = [left for left in near_one if left not in paired_near_one]
+        if sharpe_columns:
+            supplements["sharpe"] = min(sharpe_columns)
+    if "max_drawdown" not in headers and paired_near_one:
+        supplements["max_drawdown"] = min(paired_near_one)
+    return supplements
 
 
 def _nearest_cell(
