@@ -53,7 +53,25 @@ ATTENDANCE_OPTIONS = (
 )
 ATTENDANCE_LABELS = dict(ATTENDANCE_OPTIONS)
 REVIEWABLE_STATUSES = {"needs_review", "stale", "failed"}
-MISSING_METRIC_STATUSES = {"stale", "insufficient_data", "failed"}
+ITEM_STATUS_LABELS = {
+    "ready": "可生成",
+    "needs_review": "待人工审核",
+    "stale": "数据待补",
+    "failed": "处理失败",
+}
+MATCH_SOURCE_LABELS = {
+    "image": "截图识别",
+    "manual": "人工审核",
+    "public_provider": "公募数据",
+    "none": "未匹配",
+}
+RUN_STATUS_LABELS = {
+    "uploaded": "等待处理",
+    "processing": "处理中",
+    "completed": "已完成",
+    "completed_with_warnings": "已完成，待复核",
+    "failed": "处理失败",
+}
 
 
 def _parse_filter_date(value: str) -> date | None:
@@ -455,6 +473,7 @@ def create_app(
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
         items = list(run.items)
+        review_count = sum(item.row_status in REVIEWABLE_STATUSES for item in items)
         return templates.TemplateResponse(
             request=request,
             name="preview.html",
@@ -463,6 +482,12 @@ def create_app(
                 "run": run,
                 "items": items,
                 "csrf_token": csrf_token(request),
+                "item_status_labels": ITEM_STATUS_LABELS,
+                "match_source_labels": MATCH_SOURCE_LABELS,
+                "run_status_label": RUN_STATUS_LABELS.get(run.status, run.status),
+                "reviewable_statuses": REVIEWABLE_STATUSES,
+                "review_count": review_count,
+                "metric_count": len(METRIC_FIELDS),
             },
         )
 
@@ -501,11 +526,12 @@ def create_app(
                 "run": run,
                 "products": products,
                 "review_rows": review_rows,
-                "metric_fields": METRIC_FIELDS,
                 "csrf_token": csrf_token(request),
                 "error": error,
                 "pending_count": len(reviewable_items),
                 "show_all": show_all,
+                "item_status_labels": ITEM_STATUS_LABELS,
+                "match_source_labels": MATCH_SOURCE_LABELS,
             },
             status_code=status_code,
         )
@@ -536,6 +562,12 @@ def create_app(
             review_note = item.error_reason.removeprefix("人工审核：")
         if draft is not None:
             review_note = draft.get("review_note", "")
+        missing_fields = tuple(
+            field for field in METRIC_FIELDS if field.name not in item.metric_values
+        )
+        recognized_fields = tuple(
+            field for field in METRIC_FIELDS if field.name in item.metric_values
+        )
         return {
             "item": item,
             "metric_values": values,
@@ -544,11 +576,10 @@ def create_app(
             else default_choice,
             "can_create_private": can_create_private,
             "review_note": review_note,
-            "missing_metrics": {
-                field.name
-                for field in METRIC_FIELDS
-                if item.metric_status.get(field.name) in MISSING_METRIC_STATUSES
-            },
+            "missing_fields": missing_fields,
+            "recognized_fields": recognized_fields,
+            "missing_count": len(missing_fields),
+            "recognized_count": len(recognized_fields),
         }
 
     @app.get("/updates/{run_id}/review", response_class=HTMLResponse)

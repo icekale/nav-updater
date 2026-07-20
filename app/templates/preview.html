@@ -1,9 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">RUN #{{ run.id }}</p><h1>匹配预览</h1><p class="muted">截止日：{{ run.cutoff_date }} · 状态：{{ run.status }}</p></div></div>
-<table><thead><tr><th>Excel 行</th><th>产品名称</th><th>匹配来源</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody>
-{% for item in items %}<tr><td>{{ item.excel_row }}</td><td>{{ item.original_values.get('product_name', '') }}</td><td>{{ item.match_source }}</td><td><span class="status">{{ item.row_status }}</span></td><td>{{ item.error_reason or '' }}</td><td>{% if item.row_status == 'needs_review' %}<form method="post" action="/updates/{{ run.id }}/items/{{ item.id }}/resolve" class="inline-form"><input type="hidden" name="token" value="{{ csrf_token }}"><input type="hidden" name="action" value="skip"><button type="submit" class="link-button dark">跳过</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">没有可处理的产品行</td></tr>{% endfor %}
-</tbody></table>
+<div class="page-heading"><div><p class="eyebrow">RUN #{{ run.id }}</p><h1>匹配预览</h1><p class="muted">截止日：{{ run.cutoff_date }} · 状态：{{ run_status_label }}</p></div></div>
+<section class="result-summary" aria-labelledby="result-summary-title">
+  <div><p class="eyebrow">OCR CHECK</p><h2 id="result-summary-title">识别结果</h2></div>
+  <div class="result-summary-stats"><span>共 {{ items|length }} 条</span><strong>待人工审核 {{ review_count }} 条</strong><span>可直接生成 {{ items|length - review_count }} 条</span></div>
+</section>
+<div class="table-wrap"><table class="preview-table"><thead><tr><th>Excel 行</th><th>产品名称</th><th>匹配来源</th><th>识别字段</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody>
+{% for item in items %}<tr><td>{{ item.excel_row }}</td><td>{{ item.original_values.get('product_name', '') }}</td><td>{{ match_source_labels.get(item.match_source, item.match_source) }}</td><td>已识别 {{ item.metric_values|length }} / {{ metric_count }} 项</td><td><span class="status status-{{ item.row_status }}">{{ item_status_labels.get(item.row_status, item.row_status) }}</span></td><td>{{ item.error_reason or '—' }}</td><td>{% if item.row_status in reviewable_statuses %}<a class="link-button dark" href="/updates/{{ run.id }}/review#review-item-{{ item.id }}">去审核</a>{% else %}<span class="muted">无需操作</span>{% endif %}</td></tr>{% else %}<tr><td colspan="7" class="muted">没有可处理的产品行</td></tr>{% endfor %}
+</tbody></table></div>
 <div class="actions">
   <a class="button" href="/updates/{{ run.id }}/review">人工审核</a>
   {% if run.status in ['needs_review', 'failed', 'completed', 'completed_with_warnings'] %}<form method="post" action="/updates/{{ run.id }}/process" class="inline-form"><input type="hidden" name="token" value="{{ csrf_token }}"><button class="primary" type="submit">重新生成结果</button></form>{% elif run.status == 'uploaded' %}<span class="muted">已进入后台处理队列</span>{% elif run.status == 'processing' %}<span class="muted">正在生成结果</span>{% endif %}

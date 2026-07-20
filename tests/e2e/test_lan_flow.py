@@ -387,12 +387,20 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
         finally:
             session.close()
 
+        preview = client.get(f"/updates/{run_id}/preview")
+        assert "识别结果" in preview.text
+        assert "待人工审核 1 条" in preview.text
+        assert "已识别 1 / 12 项" in preview.text
+        assert "去审核" in preview.text
+
         review = client.get(f"/updates/{run_id}/review")
         assert "测试私募1号" in review.text
         assert "完整产品" not in review.text
         assert f'/updates/{run_id}/review?show_all=1' in review.text
         assert 'value="create_private" selected' in review.text
         assert 'class="metric-field missing"' in review.text
+        assert "需补录（11 项）" in review.text
+        assert "已识别（1 项，可修改）" in review.text
         all_items = client.get(f"/updates/{run_id}/review?show_all=1")
         assert "完整产品" in all_items.text
         token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
@@ -699,7 +707,7 @@ def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
         )
         assert reviewed.status_code == 303
         preview = client.get(f"/updates/{run_id}/preview")
-        assert "manual" in preview.text
+        assert ">人工审核</td>" in preview.text
         token = re.search(r'name="token" value="([^"]+)"', preview.text).group(1)
 
         processed = client.post(
