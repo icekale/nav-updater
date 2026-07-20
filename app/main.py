@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
@@ -23,7 +24,12 @@ from .auth import (
     require_csrf,
     verify_password,
 )
-from .catalog import import_catalog
+from .catalog import (
+    PrivateProductError,
+    get_or_create_private_product,
+    import_catalog,
+    matching_active_products,
+)
 from .config import Settings, ensure_data_dir, get_settings
 from .db import SessionLocal, get_session
 from .domain.matching import parse_catalog_csv
@@ -45,6 +51,8 @@ ATTENDANCE_OPTIONS = (
     ("absent", "未参会"),
 )
 ATTENDANCE_LABELS = dict(ATTENDANCE_OPTIONS)
+REVIEWABLE_STATUSES = {"needs_review", "stale", "failed"}
+MISSING_METRIC_STATUSES = {"stale", "insufficient_data", "failed"}
 
 
 def _parse_filter_date(value: str) -> date | None:
@@ -465,12 +473,24 @@ def create_app(
         *,
         error: str | None = None,
         status_code: int = 200,
+        show_all: bool = False,
+        draft_item_id: int | None = None,
+        draft: Mapping[str, str] | None = None,
     ) -> HTMLResponse:
         products = session.scalars(
             select(Product).where(Product.is_active.is_(True)).order_by(Product.product_code)
         ).all()
+        products_by_id = {product.id: product for product in products}
+        reviewable_items = [item for item in run.items if item.row_status in REVIEWABLE_STATUSES]
+        visible_items = run.items if show_all else reviewable_items
         review_rows = [
-            {"item": item, "metric_values": formatted_metric_values(item)} for item in run.items
+            review_row(
+                item,
+                products_by_id,
+                session,
+                draft if item.id == draft_item_id else None,
+            )
+            for item in visible_items
         ]
         return templates.TemplateResponse(
             request=request,
@@ -483,21 +503,60 @@ def create_app(
                 "metric_fields": METRIC_FIELDS,
                 "csrf_token": csrf_token(request),
                 "error": error,
+                "pending_count": len(reviewable_items),
+                "show_all": show_all,
             },
             status_code=status_code,
         )
+
+    def review_row(
+        item,
+        products_by_id: dict[int, Product],
+        session: Session,
+        draft: Mapping[str, str] | None,
+    ) -> dict[str, object]:
+        source_name = str(item.original_values.get("product_name", ""))
+        selected_choice = ""
+        can_create_private = False
+        if draft is not None:
+            selected_choice = draft.get("product_choice", "")
+        elif item.product_id in products_by_id:
+            selected_choice = f"product:{item.product_id}"
+        else:
+            matches = matching_active_products(session, source_name)
+            if len(matches) == 1:
+                selected_choice = f"product:{matches[0].id}"
+            elif not matches:
+                selected_choice = "create_private"
+                can_create_private = True
+        values = formatted_metric_values(item)
+        if draft is not None:
+            values = {field.name: draft.get(field.name, "") for field in METRIC_FIELDS}
+        return {
+            "item": item,
+            "metric_values": values,
+            "selected_choice": selected_choice,
+            "can_create_private": can_create_private,
+            "review_note": draft.get("review_note", "") if draft is not None else "",
+            "missing_metrics": {
+                field.name
+                for field in METRIC_FIELDS
+                if item.metric_status.get(field.name) in MISSING_METRIC_STATUSES
+            },
+        }
 
     @app.get("/updates/{run_id}/review", response_class=HTMLResponse)
     def review_update(
         run_id: int,
         request: Request,
+        show_all: bool = False,
         user: User = Depends(current_user),
         session: Session = Depends(get_session),
     ):
         run = session.get(UpdateRun, run_id)
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
-        return review_response(request, run, session, user)
+        return review_response(request, run, session, user, show_all=show_all)
 
     @app.post("/updates/{run_id}/items/{item_id}/review", response_class=HTMLResponse)
     async def save_review(
@@ -505,7 +564,7 @@ def create_app(
         item_id: int,
         request: Request,
         token: str = Form(...),
-        product_id: int = Form(...),
+        product_choice: str = Form(...),
         review_note: str = Form(...),
         user: User = Depends(current_user),
         session: Session = Depends(get_session),
@@ -524,21 +583,32 @@ def create_app(
                 error="批次正在处理中，请等待完成后再保存审核",
                 status_code=409,
             )
-        product = session.scalar(
-            select(Product).where(Product.id == product_id, Product.is_active.is_(True))
-        )
-        if product is None:
-            return review_response(
-                request,
-                run,
-                session,
-                user,
-                error="请选择有效产品",
-                status_code=422,
-            )
         form = await request.form()
         inputs = {field.name: form.get(field.name, "") for field in METRIC_FIELDS}
+        draft = {
+            **{field.name: str(value) for field, value in zip(METRIC_FIELDS, inputs.values())},
+            "product_choice": product_choice,
+            "review_note": review_note,
+        }
         try:
+            created_product = False
+            if product_choice == "create_private":
+                product, created_product = get_or_create_private_product(
+                    session,
+                    str(item.original_values.get("product_name", "")),
+                )
+            elif product_choice.startswith("product:"):
+                try:
+                    product_id = int(product_choice.removeprefix("product:"))
+                except ValueError as exc:
+                    raise ManualReviewError("请选择有效产品") from exc
+                product = session.scalar(
+                    select(Product).where(Product.id == product_id, Product.is_active.is_(True))
+                )
+                if product is None:
+                    raise ManualReviewError("请选择有效产品")
+            else:
+                raise ManualReviewError("请选择有效产品")
             reviewed = save_manual_review(
                 session,
                 item=item,
@@ -546,8 +616,31 @@ def create_app(
                 inputs=inputs,
                 note=review_note,
             )
-        except ManualReviewError as exc:
-            return review_response(request, run, session, user, error=str(exc), status_code=422)
+        except (ManualReviewError, PrivateProductError) as exc:
+            return review_response(
+                request,
+                run,
+                session,
+                user,
+                error=str(exc),
+                status_code=422,
+                draft_item_id=item_id,
+                draft=draft,
+            )
+        if created_product:
+            session.add(
+                AuditLog(
+                    actor_id=user.id,
+                    action="create_private_product",
+                    object_type="product",
+                    object_id=str(product.id),
+                    context={
+                        "product_name": product.product_name,
+                        "product_code": product.product_code,
+                        "run_id": run.id,
+                    },
+                )
+            )
         session.add(
             AuditLog(
                 actor_id=user.id,

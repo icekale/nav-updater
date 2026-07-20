@@ -320,7 +320,7 @@ def test_manual_review_is_rejected_while_run_is_processing(tmp_path: Path) -> No
             f"/updates/{run_id}/items/{item_id}/review",
             data={
                 "token": token,
-                "product_id": product_id,
+                "product_choice": f"product:{product_id}",
                 "weekly": "12.34",
                 "review_note": "人工核对",
             },
@@ -331,6 +331,85 @@ def test_manual_review_is_rejected_while_run_is_processing(tmp_path: Path) -> No
     session = factory()
     try:
         assert session.get(RunItem, item_id).match_source == "none"
+    finally:
+        session.close()
+
+
+def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="completed")
+            session.add(run)
+            session.flush()
+            item = RunItem(
+                run_id=run.id,
+                excel_row=2,
+                original_values={"product_name": "测试私募1号"},
+                row_status="needs_review",
+                metric_values={"weekly": "0.0123"},
+                metric_status={"weekly": "extracted", "mtd": "stale"},
+            )
+            ready_item = RunItem(
+                run_id=run.id,
+                excel_row=3,
+                original_values={"product_name": "完整产品"},
+                row_status="ready",
+            )
+            session.add_all([item, ready_item])
+            session.commit()
+            run_id = run.id
+            item_id = item.id
+        finally:
+            session.close()
+
+        review = client.get(f"/updates/{run_id}/review")
+        assert "测试私募1号" in review.text
+        assert "完整产品" not in review.text
+        token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
+        saved = client.post(
+            f"/updates/{run_id}/items/{item_id}/review",
+            data={
+                "token": token,
+                "product_choice": "create_private",
+                "weekly": "1.23",
+                "mtd": "2.34",
+                "review_note": "核对管理人净值表",
+            },
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+
+    session = factory()
+    try:
+        product = session.query(Product).filter_by(product_name="测试私募1号").one()
+        assert product.product_type == "private"
+        assert session.get(RunItem, item_id).product_id == product.id
+        assert session.query(AuditLog).filter_by(action="create_private_product").count() == 1
+        assert session.query(AuditLog).filter_by(action="manual_review").count() == 1
     finally:
         session.close()
 
@@ -411,7 +490,7 @@ def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
             f"/updates/{run_id}/items/{item_id}/review",
             data={
                 "token": token,
-                "product_id": product_id,
+                "product_choice": f"product:{product_id}",
                 "weekly": "12.34",
                 "review_note": "人工核对管理人净值表",
             },
