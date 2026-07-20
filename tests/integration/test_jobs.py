@@ -11,7 +11,7 @@ from app.db import Base
 from app.domain.matching import CatalogRecord
 from app.domain.types import NavPoint
 from app.excel.template_adapter import TemplateAdapter
-from app.jobs.processor import ALL_METRICS, process_run
+from app.jobs.processor import ALL_METRICS, _find_image_row, process_run
 from app.jobs.service import (
     RUN_COMPLETED,
     RUN_PROCESSING,
@@ -23,6 +23,7 @@ from app.jobs.service import (
 )
 from app.models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun, User
 from app.ocr.engine import OCRToken
+from app.ocr.table_parser import OCRMetricRow
 from app.providers.public_fund import PublicFundRecord
 
 
@@ -326,6 +327,59 @@ def test_process_run_matches_screenshot_without_catalog_product() -> None:
     assert item.match_source == "image"
     assert item.product_id is None
     assert adapter.updates[item.excel_row] == {"weekly": Decimal("0.052")}
+
+
+def test_find_image_row_matches_unique_truncated_chinese_name() -> None:
+    item_name = "浑瑾岳桐金选1号B"
+    row = OCRMetricRow(
+        product_name="浑瑾岳桐B1I1",
+        product_code=None,
+        metrics={"weekly": Decimal("-0.0414")},
+        confidence=0.99,
+    )
+
+    assert _find_image_row(item_name, [row], [], [item_name]) == row
+
+
+def test_find_image_row_rejects_ambiguous_truncated_chinese_name() -> None:
+    row = OCRMetricRow(
+        product_name="浑瑾岳桐B1I1",
+        product_code=None,
+        metrics={"weekly": Decimal("-0.0414")},
+        confidence=0.99,
+    )
+
+    assert _find_image_row(
+        "浑瑾岳桐金选1号B",
+        [row],
+        [],
+        ["浑瑾岳桐金选1号B", "浑瑾岳桐金选2号B"],
+    ) is None
+
+
+def test_find_image_row_rejects_truncated_name_with_a_different_product_code() -> None:
+    item_name = "浑瑾岳桐金选1号B"
+    row = OCRMetricRow(
+        product_name="浑瑾岳桐B1I1",
+        product_code="P999",
+        metrics={"weekly": Decimal("-0.0414")},
+        confidence=0.99,
+    )
+    other_product = Product(product_name="其他产品", product_code="P999", product_type="private")
+
+    assert _find_image_row(item_name, [row], [other_product], [item_name]) is None
+
+
+def test_find_image_row_allows_duplicate_excel_rows_for_one_truncated_name() -> None:
+    item_name = "浑瑾岳桐金选1号B"
+    row = OCRMetricRow(
+        product_name="浑瑾岳桐B1I1",
+        product_code=None,
+        metrics={"weekly": Decimal("-0.0414")},
+        confidence=0.99,
+    )
+
+    assert _find_image_row(item_name, [row], [], [item_name, item_name]) == row
 
 
 def test_process_run_resolves_and_persists_unique_public_product() -> None:

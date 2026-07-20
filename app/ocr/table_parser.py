@@ -196,7 +196,23 @@ def _supplement_headers(
         if _header_key(cell.text) == "max_drawdown_label"
     ]
     if "mtd" in headers and "one_year_return" in headers and "ytd" not in headers:
-        supplements["ytd"] = (headers["mtd"] + headers["one_year_return"]) / 2
+        mtd_left = headers["mtd"]
+        one_year_left = headers["one_year_return"]
+        next_metric_left = min(
+            (
+                left
+                for key, left in headers.items()
+                if key in METRIC_KEYS and left > one_year_left
+            ),
+            default=None,
+        )
+        if (
+            next_metric_left is not None
+            and (next_metric_left - one_year_left) * 4 >= (one_year_left - mtd_left) * 3
+        ):
+            supplements["ytd"] = one_year_left
+        else:
+            supplements["ytd"] = (mtd_left + one_year_left) / 2
 
     paired_near_one = {
         left

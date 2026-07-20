@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -76,18 +77,45 @@ def _product_by_name(products: Iterable[Product], name: str) -> Product | None:
 
 
 def _find_image_row(
-    item_name: str, rows: list[OCRMetricRow], products: list[Product]
+    item_name: str,
+    rows: list[OCRMetricRow],
+    products: list[Product],
+    item_names: list[str],
 ) -> OCRMetricRow | None:
     catalog = _product_records(products)
     for row in rows:
         record = match_product(
             product_code=row.product_code, product_name=row.product_name, products=catalog
         )
-        if record and normalize_name(record.product_name) == normalize_name(item_name):
-            return row
+        if record:
+            if normalize_name(record.product_name) == normalize_name(item_name):
+                return row
+            continue
         if normalize_name(row.product_name) == normalize_name(item_name):
             return row
+        if _is_unique_truncated_chinese_name(item_name, row.product_name, item_names):
+            return row
     return None
+
+
+def _leading_chinese(value: str) -> str:
+    match = re.match(r"[\u4e00-\u9fff]+", value.strip())
+    return match.group(0) if match else ""
+
+
+def _is_unique_truncated_chinese_name(
+    item_name: str,
+    ocr_name: str,
+    item_names: list[str],
+) -> bool:
+    ocr_prefix = _leading_chinese(ocr_name)
+    item_prefix = _leading_chinese(item_name)
+    if len(ocr_prefix) < 4 or len(ocr_prefix) >= len(item_prefix):
+        return False
+    candidates = {
+        normalize_name(name) for name in item_names if _leading_chinese(name).startswith(ocr_prefix)
+    }
+    return candidates == {normalize_name(item_name)}
 
 
 def _store_observations(session: Session, product: Product, points) -> None:
@@ -225,6 +253,7 @@ def process_run(
         stale: dict[int, set[str]] = {}
         warnings = False
         items = session.scalars(select(RunItem).where(RunItem.run_id == run_id)).all()
+        item_names = [str(item.original_values.get("product_name", "")) for item in items]
         for item in items:
             name = str(item.original_values.get("product_name", ""))
             if item.match_source == "manual":
@@ -232,7 +261,7 @@ def process_run(
                 stale[item.excel_row] = _stale_metrics(item.metric_status)
                 warnings = warnings or item.row_status != "ready" or bool(stale[item.excel_row])
                 continue
-            image_row = _find_image_row(name, screenshot_rows, products)
+            image_row = _find_image_row(name, screenshot_rows, products, item_names)
             product = _product_by_name(products, name)
             if image_row is not None:
                 statuses = {key: "extracted" for key in image_row.metrics}
