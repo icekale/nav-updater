@@ -128,6 +128,59 @@ def test_extract_metric_rows_uses_each_repeated_header_layout() -> None:
     ]
 
 
+def test_extract_metric_rows_recovers_ytd_for_each_repeated_header() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("产品名称", 10, 10),
+            token("近一周(%)", 100, 10),
+            token("MTD(%)", 200, 10),
+            token("(%)1A", 400, 10),
+            token("2025(%)", 500, 10),
+            token("产品A", 10, 50),
+            token("1.00%", 100, 50),
+            token("2.00%", 200, 50),
+            token("3.00%", 300, 50),
+            token("4.00%", 500, 50),
+            token("产品名称", 710, 100),
+            token("近一周(%)", 800, 100),
+            token("MTD(%)", 900, 100),
+            token("(%)1A", 1100, 100),
+            token("2025(%)", 1200, 100),
+            token("产品B", 710, 140),
+            token("5.00%", 800, 140),
+            token("6.00%", 900, 140),
+            token("7.00%", 1000, 140),
+            token("8.00%", 1200, 140),
+        ]
+    )
+
+    assert [(row.product_name, row.metrics) for row in rows] == [
+        (
+            "产品A",
+            {
+                "weekly": Decimal("0.01"),
+                "mtd": Decimal("0.02"),
+                "ytd": Decimal("0.03"),
+                "annual_2025": Decimal("0.04"),
+            },
+        ),
+        (
+            "产品B",
+            {
+                "weekly": Decimal("0.05"),
+                "mtd": Decimal("0.06"),
+                "ytd": Decimal("0.07"),
+                "annual_2025": Decimal("0.08"),
+            },
+        ),
+    ]
+
+
 def test_extract_metric_rows_ignores_noise_before_a_valid_mtd_value() -> None:
     def token(text: str, left: float, top: float) -> OCRToken:
         return OCRToken(
