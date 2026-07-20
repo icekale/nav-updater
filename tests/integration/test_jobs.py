@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app import catalog
 from app.catalog import import_catalog
 from app.db import Base
 from app.domain.matching import CatalogRecord
@@ -44,6 +45,64 @@ def test_catalog_import_persists_products_and_run_state() -> None:
     assert imported[0].product_code == "001856"
     assert session.query(Product).count() == 1
     assert session.query(UpdateRun).one().status == "uploaded"
+
+
+def test_get_or_create_private_product_uses_a_stable_code() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    product, created = catalog.get_or_create_private_product(session, "仁桥 金选泽源5B")
+
+    assert created is True
+    assert product.product_name == "仁桥 金选泽源5B"
+    assert product.product_type == "private"
+    assert product.product_code.startswith("private-")
+    assert len(product.product_code) == len("private-") + 12
+
+    reused, reused_created = catalog.get_or_create_private_product(session, "仁桥金选泽源5B")
+
+    assert (reused.id, reused_created) == (product.id, False)
+
+
+def test_get_or_create_private_product_rejects_ambiguous_name() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add_all(
+        [
+            Product(product_name="产品A", product_code="P001", product_type="private"),
+            Product(
+                product_name="产品B",
+                product_code="P002",
+                product_type="private",
+                historical_names=["产品A"],
+            ),
+        ]
+    )
+    session.commit()
+
+    assert len(catalog.matching_active_products(session, "产品A")) == 2
+    with pytest.raises(catalog.PrivateProductError, match="多个激活产品"):
+        catalog.get_or_create_private_product(session, "产品A")
+
+
+def test_get_or_create_private_product_rejects_internal_code_collision() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    product_name = "测试私募冲突"
+    session.add(
+        Product(
+            product_name="其他产品",
+            product_code=catalog.private_product_code(product_name),
+            product_type="private",
+        )
+    )
+    session.commit()
+
+    with pytest.raises(catalog.PrivateProductError, match="内部产品编号冲突"):
+        catalog.get_or_create_private_product(session, product_name)
 
 
 def test_create_run_skips_blank_template_rows_and_claims_work(tmp_path: Path) -> None:
