@@ -489,6 +489,132 @@ def test_review_keeps_submitted_values_after_private_code_conflict(tmp_path: Pat
     assert 'value="create_private" selected' in failed.text
 
 
+def test_review_keeps_draft_after_empty_product_choice(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="completed")
+            session.add(run)
+            session.flush()
+            item = RunItem(
+                run_id=run.id,
+                excel_row=2,
+                original_values={"product_name": "测试空选择"},
+                row_status="needs_review",
+            )
+            session.add(item)
+            session.commit()
+            run_id = run.id
+            item_id = item.id
+        finally:
+            session.close()
+
+        review = client.get(f"/updates/{run_id}/review")
+        token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
+        failed = client.post(
+            f"/updates/{run_id}/items/{item_id}/review",
+            data={
+                "token": token,
+                "product_choice": "",
+                "weekly": "1.23",
+                "review_note": "保留这段说明",
+            },
+        )
+
+    assert failed.status_code == 422
+    assert "请选择有效产品" in failed.text
+    assert 'value="1.23"' in failed.text
+    assert "保留这段说明" in failed.text
+
+
+def test_review_does_not_create_private_product_for_invalid_metric(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="completed")
+            session.add(run)
+            session.flush()
+            item = RunItem(
+                run_id=run.id,
+                excel_row=2,
+                original_values={"product_name": "测试无效指标"},
+                row_status="needs_review",
+            )
+            session.add(item)
+            session.commit()
+            run_id = run.id
+            item_id = item.id
+        finally:
+            session.close()
+
+        review = client.get(f"/updates/{run_id}/review")
+        token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
+        failed = client.post(
+            f"/updates/{run_id}/items/{item_id}/review",
+            data={
+                "token": token,
+                "product_choice": "create_private",
+                "weekly": "not-a-number",
+                "review_note": "保留这段说明",
+            },
+        )
+
+    assert failed.status_code == 422
+    assert 'value="not-a-number"' in failed.text
+    assert 'value="create_private" selected' in failed.text
+    session = factory()
+    try:
+        assert session.query(Product).filter_by(product_name="测试无效指标").count() == 0
+    finally:
+        session.close()
+
+
 def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",

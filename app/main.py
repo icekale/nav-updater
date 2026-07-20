@@ -38,6 +38,7 @@ from .jobs.review import (
     METRIC_FIELDS,
     ManualReviewError,
     formatted_metric_values,
+    parse_manual_metrics,
     save_manual_review,
 )
 from .jobs.service import create_run, lock_run_item, requeue_run, resolve_item
@@ -569,8 +570,8 @@ def create_app(
         item_id: int,
         request: Request,
         token: str = Form(...),
-        product_choice: str = Form(...),
-        review_note: str = Form(...),
+        product_choice: str = Form(""),
+        review_note: str = Form(""),
         user: User = Depends(current_user),
         session: Session = Depends(get_session),
     ):
@@ -595,6 +596,21 @@ def create_app(
             "product_choice": product_choice,
             "review_note": review_note,
         }
+        try:
+            if not review_note.strip():
+                raise ManualReviewError("审核说明不能为空")
+            parse_manual_metrics(inputs)
+        except ManualReviewError as exc:
+            return review_response(
+                request,
+                run,
+                session,
+                user,
+                error=str(exc),
+                status_code=422,
+                draft_item_id=item_id,
+                draft=draft,
+            )
         try:
             created_product = False
             if product_choice == "create_private":
