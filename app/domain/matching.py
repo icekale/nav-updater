@@ -21,6 +21,7 @@ class CatalogRecord:
 def normalize_name(value: str) -> str:
     text = value.strip().replace("（", "(").replace("）", ")")
     text = re.sub(r"\s+", "", text)
+    text = re.sub(r"\[(?:\d+|[il]*)\]$", "", text, flags=re.IGNORECASE)
     return text.casefold()
 
 

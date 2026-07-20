@@ -13,6 +13,11 @@ def test_normalize_name_removes_spacing_and_full_width_parentheses() -> None:
     assert normalize_name(" 易方达（环保主题） A ") == "易方达(环保主题)a"
 
 
+def test_normalize_name_removes_ocr_footnote_suffix() -> None:
+    assert normalize_name("仁桥金选泽源5B[1]") == normalize_name("仁桥金选泽源5B")
+    assert normalize_name("开思金选港股通1号B[]") == normalize_name("开思金选港股通1号B")
+
+
 def test_catalog_requires_exact_three_columns() -> None:
     records = parse_catalog_csv("product_name,product_code,product_type\n基金 A,001856,public\n")
     assert records == [CatalogRecord("基金 A", "001856", "public")]

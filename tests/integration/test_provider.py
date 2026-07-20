@@ -52,7 +52,8 @@ def test_public_provider_resolves_unique_historical_name() -> None:
         [["001856", "YFDHBZTHHA", "易方达环保主题混合A", "混合型-灵活", "YFDHBZTHHA"]],
         ensure_ascii=False,
     )
-    provider = PublicFundProvider(httpx.Client(transport=TextMockTransport(f"var r = {catalog};")))
+    transport = TextMockTransport(f"\ufeffvar r = {catalog};")
+    provider = PublicFundProvider(httpx.Client(transport=transport))
 
     record = provider.resolve_by_name("易方达环保主题灵活配置混合A")
 

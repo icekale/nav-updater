@@ -74,7 +74,8 @@ class PublicFundProvider:
         try:
             response = self.client.get(self.catalog_endpoint)
             response.raise_for_status()
-            match = re.fullmatch(r"\s*var\s+r\s*=\s*(\[.*\])\s*;?\s*", response.text, re.DOTALL)
+            content = response.text.lstrip("\ufeff")
+            match = re.fullmatch(r"\s*var\s+r\s*=\s*(\[.*\])\s*;?\s*", content, re.DOTALL)
             if match is None:
                 raise ValueError("missing fund catalog")
             raw_records = json.loads(match.group(1))
