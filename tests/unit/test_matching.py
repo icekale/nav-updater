@@ -3,6 +3,7 @@ import pytest
 from app.domain.matching import (
     CatalogConflict,
     CatalogRecord,
+    is_unique_ocr_name_match,
     match_product,
     normalize_name,
     normalize_ocr_name,
@@ -23,6 +24,19 @@ def test_normalize_ocr_name_removes_only_unmatched_trailing_artifacts() -> None:
     assert normalize_ocr_name("聚鸣金选高山8号B1]") == "聚鸣金选高山8号b1"
     assert normalize_ocr_name("产品(稳健)") == "产品(稳健)"
     assert normalize_ocr_name("仁桥金选泽源5B[1]") == normalize_name("仁桥金选泽源5B")
+
+
+def test_unique_ocr_name_match_requires_a_single_candidate() -> None:
+    assert is_unique_ocr_name_match(
+        "仁桥金选泽源5B",
+        "仁桥金选泽源5B1]",
+        ["仁桥金选泽源5B"],
+    )
+    assert not is_unique_ocr_name_match(
+        "仁桥金选泽源5B",
+        "仁桥金选泽源5B1]",
+        ["仁桥金选泽源5B", "仁桥金选泽源6B"],
+    )
 
 
 def test_catalog_requires_exact_three_columns() -> None:

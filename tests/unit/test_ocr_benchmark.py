@@ -63,6 +63,50 @@ def test_benchmark_report_exposes_confirmed_source_blank_recall() -> None:
     assert "源空值识别率" in render_markdown(report)
 
 
+def test_evaluate_cases_uses_the_unique_ocr_candidate_rule() -> None:
+    from app.ocr.benchmark import BenchmarkCase, evaluate_cases
+
+    case = BenchmarkCase(
+        image="report.png",
+        sha256="a" * 64,
+        product_name="仁桥金选泽源5B",
+        metrics={"weekly": Decimal("0.01")},
+        candidate_names=("仁桥金选泽源5B",),
+    )
+    row = OCRMetricRow(
+        product_name="仁桥金选泽源5B1]",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+    )
+
+    report = evaluate_cases([case], {"report.png": [row]})
+
+    assert report.product_matches == 1
+
+
+def test_evaluate_cases_rejects_an_ambiguous_ocr_candidate() -> None:
+    from app.ocr.benchmark import BenchmarkCase, evaluate_cases
+
+    case = BenchmarkCase(
+        image="report.png",
+        sha256="a" * 64,
+        product_name="仁桥金选泽源5B",
+        metrics={"weekly": Decimal("0.01")},
+        candidate_names=("仁桥金选泽源5B", "仁桥金选泽源6B"),
+    )
+    row = OCRMetricRow(
+        product_name="仁桥金选泽源5B1]",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+    )
+
+    report = evaluate_cases([case], {"report.png": [row]})
+
+    assert report.product_matches == 0
+
+
 def test_evaluate_cases_flags_value_found_in_a_different_metric_column() -> None:
     from app.ocr.benchmark import BenchmarkCase, evaluate_cases
 
@@ -109,6 +153,30 @@ def test_load_cases_rejects_incomplete_metrics(tmp_path: Path) -> None:
 
     with pytest.raises(BenchmarkFormatError, match="metrics"):
         load_cases(labels)
+
+
+def test_load_cases_attaches_the_explicit_candidate_pool(tmp_path: Path) -> None:
+    from app.ocr.benchmark import load_cases
+
+    labels = tmp_path / "labels.json"
+    labels.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "candidate_names": ["产品A", "产品B"],
+                "cases": [
+                    {
+                        "image": "report.png",
+                        "sha256": "a" * 64,
+                        "product_name": "产品A",
+                        "metrics": {metric: "0" for metric in METRIC_KEYS},
+                    }
+                ],
+            }
+        )
+    )
+
+    assert load_cases(labels)[0].candidate_names == ("产品A", "产品B")
 
 
 def test_render_markdown_includes_rates_and_wrong_column_count() -> None:

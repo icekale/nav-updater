@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from ..domain.matching import normalize_name
+from ..domain.matching import is_unique_ocr_name_match
 from .engine import OCRToken
 from .table_parser import METRIC_KEYS, OCRMetricRow, extract_metric_rows
 
@@ -27,6 +27,7 @@ class BenchmarkCase:
     sha256: str
     product_name: str
     metrics: Mapping[str, Decimal | None]
+    candidate_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,11 @@ def evaluate_cases(
 ) -> BenchmarkReport:
     results = []
     for case in cases:
-        row = _matched_row(case.product_name, rows_by_image.get(case.image, []))
+        row = _matched_row(
+            case.product_name,
+            rows_by_image.get(case.image, []),
+            case.candidate_names or (case.product_name,),
+        )
         if row is None:
             results.append(
                 BenchmarkCaseResult(
@@ -171,6 +176,7 @@ def load_cases(path: str | Path) -> list[BenchmarkCase]:
     if not isinstance(raw_cases, list) or not raw_cases:
         raise BenchmarkFormatError("labels must contain at least one case")
 
+    candidate_names = _parse_candidate_names(payload.get("candidate_names"))
     cases = []
     for index, raw_case in enumerate(raw_cases, start=1):
         if not isinstance(raw_case, dict):
@@ -191,6 +197,7 @@ def load_cases(path: str | Path) -> list[BenchmarkCase]:
                 sha256=sha256,
                 product_name=product_name,
                 metrics=_parse_metrics(metrics, index),
+                candidate_names=candidate_names,
             )
         )
     return cases
@@ -327,9 +334,14 @@ def write_report(report: BenchmarkReport, output_dir: str | Path) -> None:
     (output / "summary.md").write_text(render_markdown(report), encoding="utf-8")
 
 
-def _matched_row(product_name: str, rows: Iterable[OCRMetricRow]) -> OCRMetricRow | None:
-    expected = normalize_name(product_name)
-    matches = [row for row in rows if normalize_name(row.product_name) == expected]
+def _matched_row(
+    product_name: str, rows: Iterable[OCRMetricRow], candidate_names: Iterable[str]
+) -> OCRMetricRow | None:
+    matches = [
+        row
+        for row in rows
+        if is_unique_ocr_name_match(product_name, row.product_name, candidate_names)
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -357,6 +369,16 @@ def _parse_metrics(raw_metrics: object, index: int) -> dict[str, Decimal | None]
             raise BenchmarkFormatError(f"case {index} metric {metric} is invalid")
         metrics[metric] = value
     return metrics
+
+
+def _parse_candidate_names(raw_candidates: object) -> tuple[str, ...]:
+    if raw_candidates is None:
+        return ()
+    if not isinstance(raw_candidates, list) or not all(
+        isinstance(name, str) and name.strip() for name in raw_candidates
+    ):
+        raise BenchmarkFormatError("candidate_names must be a list of non-empty strings")
+    return tuple(name.strip() for name in raw_candidates)
 
 
 def _rate(numerator: int, denominator: int) -> float:

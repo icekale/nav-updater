@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -10,7 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..catalog import ensure_public_product
-from ..domain.matching import CatalogRecord, match_product, normalize_name, normalize_ocr_name
+from ..domain.matching import (
+    CatalogRecord,
+    is_unique_ocr_name_match,
+    match_product,
+    normalize_name,
+    normalize_ocr_name,
+)
 from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
 from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun
@@ -84,6 +89,7 @@ def _find_image_row(
     item_names: list[str],
 ) -> OCRMetricRow | None:
     catalog = _product_records(products)
+    candidate_names = [*item_names, *(record.product_name for record in catalog)]
     for row in rows:
         record = match_product(
             product_code=row.product_code, product_name=row.product_name, products=catalog
@@ -94,28 +100,9 @@ def _find_image_row(
             continue
         if normalize_ocr_name(row.product_name) == normalize_name(item_name):
             return row
-        if _is_unique_truncated_chinese_name(item_name, row.product_name, item_names):
+        if is_unique_ocr_name_match(item_name, row.product_name, candidate_names):
             return row
     return None
-
-
-def _leading_chinese(value: str) -> str:
-    match = re.match(r"[\u4e00-\u9fff]+", value.strip())
-    return match.group(0) if match else ""
-
-
-def _is_unique_truncated_chinese_name(
-    item_name: str,
-    ocr_name: str,
-    item_names: list[str],
-) -> bool:
-    ocr_prefix = _leading_chinese(normalize_ocr_name(ocr_name))
-    if len(ocr_prefix) < 4:
-        return False
-    candidates = {
-        normalize_name(name) for name in item_names if _leading_chinese(name).startswith(ocr_prefix)
-    }
-    return candidates == {normalize_name(item_name)}
 
 
 def _store_observations(session: Session, product: Product, points) -> None:

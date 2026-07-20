@@ -657,6 +657,22 @@ def test_find_image_row_rejects_an_equal_chinese_prefix_with_two_excel_candidate
     ) is None
 
 
+def test_find_image_row_rejects_a_prefix_with_an_active_catalog_sibling() -> None:
+    row = OCRMetricRow(
+        product_name="仁桥金选泽源5B1]",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+    )
+    sibling = Product(
+        product_name="仁桥金选泽源6B",
+        product_code="private-bridge-6b",
+        product_type="private",
+    )
+
+    assert _find_image_row("仁桥金选泽源5B", [row], [sibling], ["仁桥金选泽源5B"]) is None
+
+
 def test_find_image_row_rejects_truncated_name_with_a_different_product_code() -> None:
     item_name = "浑瑾岳桐金选1号B"
     row = OCRMetricRow(

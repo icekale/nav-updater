@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "candidate_names": [
+    "示例产品",
+    "示例产品同系列"
+  ],
   "cases": [
     {
       "image": "weekly-report.png",

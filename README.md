@@ -181,7 +181,7 @@ product_name,product_code,product_type
 
 生产默认使用 RapidOCR。截图中识别到 `-`、`--`、破折号或 `N/A` 时，对应字段会作为 `source_blank` 清空，不进入人工审核；没有读到 token 的字段不会被当作空值。`partial` 条目不会阻塞结果生成，但其未识别字段会保留原值并标红。
 
-上线 OCR 规则前，研究员应使用人工确认的标签运行基准；标签和真实截图须放在受控目录，不能提交到 Git：
+上线 OCR 规则前，研究员应使用人工确认的标签运行基准；标签中的 `candidate_names` 要包含本次 Excel 产品名和已启用目录的历史名称，用于验证唯一候选匹配。标签和真实截图须放在受控目录，不能提交到 Git：
 
 ```bash
 .venv/bin/python scripts/run_ocr_benchmark.py \

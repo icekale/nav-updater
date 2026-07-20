@@ -31,6 +31,28 @@ def normalize_ocr_name(value: str) -> str:
     return text
 
 
+def is_unique_ocr_name_match(
+    expected_name: str, ocr_name: str, candidate_names: Iterable[str]
+) -> bool:
+    expected = normalize_name(expected_name)
+    if normalize_ocr_name(ocr_name) == expected:
+        return True
+    ocr_prefix = _leading_chinese(normalize_ocr_name(ocr_name))
+    if len(ocr_prefix) < 4:
+        return False
+    candidates = {
+        normalize_name(name)
+        for name in candidate_names
+        if _leading_chinese(name).startswith(ocr_prefix)
+    }
+    return candidates == {expected}
+
+
+def _leading_chinese(value: str) -> str:
+    match = re.match(r"[\u4e00-\u9fff]+", value.strip())
+    return match.group(0) if match else ""
+
+
 def parse_catalog_rows(rows: Iterable[Mapping[str, str]]) -> list[CatalogRecord]:
     records: list[CatalogRecord] = []
     seen_codes: set[str] = set()
