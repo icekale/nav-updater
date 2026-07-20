@@ -160,9 +160,7 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
             if not cell:
                 continue
             try:
-                metrics[key] = (
-                    parse_number(cell.text) if key == "sharpe" else parse_percent(cell.text)
-                )
+                metrics[key] = _parse_metric_cell(key, cell.text)
             except ValueError:
                 continue
             confidence = min(confidence, cell.confidence)
@@ -246,7 +244,15 @@ def _metric_cells_by_header(
         if cell in excluded:
             continue
         key, left = min(headers, key=lambda item: (abs(cell.left - item[1]), item[1]))
+        try:
+            _parse_metric_cell(key, cell.text)
+        except ValueError:
+            continue
         existing = assigned.get(key)
         if existing is None or abs(cell.left - left) < abs(existing.left - left):
             assigned[key] = cell
     return assigned
+
+
+def _parse_metric_cell(key: str, text: str) -> Decimal:
+    return parse_number(text) if key == "sharpe" else parse_percent(text)

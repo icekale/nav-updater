@@ -264,8 +264,19 @@ def process_run(
             image_row = _find_image_row(name, screenshot_rows, products, item_names)
             product = _product_by_name(products, name)
             if image_row is not None:
-                statuses = {key: "extracted" for key in image_row.metrics}
-                row_status = "ready" if image_row.confidence >= 0.85 else "needs_review"
+                missing_metrics = set(ALL_METRICS) - set(image_row.metrics)
+                statuses = {
+                    key: "extracted" if key in image_row.metrics else MetricStatus.STALE.value
+                    for key in ALL_METRICS
+                }
+                review_reasons = []
+                if image_row.confidence < 0.85:
+                    review_reasons.append("OCR confidence below threshold")
+                if missing_metrics:
+                    review_reasons.append(
+                        f"OCR missing metrics: {', '.join(sorted(missing_metrics))}"
+                    )
+                row_status = "needs_review" if review_reasons else "ready"
                 _set_item(
                     item,
                     product=product,
@@ -273,11 +284,11 @@ def process_run(
                     row_status=row_status,
                     values=image_row.metrics,
                     statuses=statuses,
-                    error=None if row_status == "ready" else "OCR confidence below threshold",
+                    error="; ".join(review_reasons) or None,
                 )
                 updates[item.excel_row] = dict(image_row.metrics)
-                if row_status != "ready":
-                    warnings = True
+                stale[item.excel_row] = missing_metrics
+                warnings = warnings or row_status != "ready"
                 continue
             if product is None:
                 try:

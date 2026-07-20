@@ -186,10 +186,11 @@ class TemplateAdapter:
                 if product_cell is None or not _cell_text(product_cell, strings).strip():
                     continue
                 row_style = product_cell.get("s")
-                for metric, raw_value in values.items():
+                metrics = dict.fromkeys((*values, *stale.get(row_number, set())))
+                for metric in metrics:
                     if metric not in headers:
                         raise ValueError(f"unknown metric: {metric}")
-                    value = raw_value
+                    value = values.get(metric)
                     if metric in PERCENT_METRICS and value is not None:
                         value *= Decimal("100")
                     cell = _find_or_create_cell(sheet, row_number, headers[metric], row_style)

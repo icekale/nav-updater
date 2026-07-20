@@ -66,3 +66,18 @@ def test_stale_without_new_value_keeps_existing_cell(tmp_path: Path) -> None:
         sheet = etree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
     cell = sheet.xpath('.//x:c[@r="F2"]', namespaces=NS)[0]
     assert cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v") is None
+
+
+def test_stale_metric_without_an_update_is_marked_in_the_template(tmp_path: Path) -> None:
+    output = tmp_path / "updated.xlsx"
+    TemplateAdapter().apply_updates(
+        FIXTURE,
+        output,
+        {2: {"weekly": Decimal("0.50")}},
+        {2: {"mtd"}},
+    )
+    with ZipFile(output) as archive:
+        sheet = etree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+    cell = sheet.xpath('.//x:c[@r="G2"]', namespaces=NS)[0]
+    assert cell.get("s") is not None
+    assert cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v") is None

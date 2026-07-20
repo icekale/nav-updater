@@ -99,6 +99,37 @@ def test_extract_metric_rows_assigns_a_remaining_cell_to_its_own_column() -> Non
     assert rows[0].metrics == {"mtd": Decimal("0.005")}
 
 
+def test_extract_metric_rows_ignores_noise_before_a_valid_mtd_value() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("产品名称", 503, 10),
+            token("近一周(%)", 1281, 10),
+            token("MTD(%)", 1481, 10),
+            token("(%)1A", 1678, 10),
+            token("2025(%)", 1864, 10),
+            token("仁桥金选泽源5B[1]", 503, 50),
+            token("2020-05-22", 1088, 50),
+            token("-0.10", 1366, 50),
+            token("D", 1504, 50),
+            token("2.68", 1564, 50),
+            token("-12.95", 1736, 50),
+            token("16.83", 1935, 50),
+        ]
+    )
+
+    assert rows[0].metrics == {
+        "weekly": Decimal("-0.001"),
+        "mtd": Decimal("0.0268"),
+        "ytd": Decimal("-0.1295"),
+        "annual_2025": Decimal("0.1683"),
+    }
+
+
 def test_extract_metric_rows_uses_regular_one_a_column_as_ytd() -> None:
     def token(text: str, left: float, top: float) -> OCRToken:
         return OCRToken(
