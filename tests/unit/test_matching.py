@@ -22,6 +22,7 @@ def test_normalize_name_removes_ocr_footnote_suffix() -> None:
 def test_normalize_ocr_name_removes_only_unmatched_trailing_artifacts() -> None:
     assert normalize_ocr_name("聚鸣金选高山8号B1]") == "聚鸣金选高山8号b1"
     assert normalize_ocr_name("产品(稳健)") == "产品(稳健)"
+    assert normalize_ocr_name("仁桥金选泽源5B[1]") == normalize_name("仁桥金选泽源5B")
 
 
 def test_catalog_requires_exact_three_columns() -> None:

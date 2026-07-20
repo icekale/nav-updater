@@ -26,10 +26,9 @@ def normalize_name(value: str) -> str:
 
 
 def normalize_ocr_name(value: str) -> str:
-    text = value.strip().replace("（", "(").replace("）", ")")
-    text = re.sub(r"\s+", "", text)
+    text = normalize_name(value)
     text = re.sub(r"[\]\}]+$", "", text)
-    return text.casefold()
+    return text
 
 
 def parse_catalog_rows(rows: Iterable[Mapping[str, str]]) -> list[CatalogRecord]:
