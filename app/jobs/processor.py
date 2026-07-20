@@ -264,9 +264,18 @@ def process_run(
             image_row = _find_image_row(name, screenshot_rows, products, item_names)
             product = _product_by_name(products, name)
             if image_row is not None:
-                missing_metrics = set(ALL_METRICS) - set(image_row.metrics)
+                confirmed_blank_metrics = set(image_row.blank_metrics)
+                missing_metrics = (
+                    set(ALL_METRICS) - set(image_row.metrics) - confirmed_blank_metrics
+                )
                 statuses = {
-                    key: "extracted" if key in image_row.metrics else MetricStatus.STALE.value
+                    key: (
+                        "extracted"
+                        if key in image_row.metrics
+                        else "source_blank"
+                        if key in confirmed_blank_metrics
+                        else MetricStatus.STALE.value
+                    )
                     for key in ALL_METRICS
                 }
                 review_reasons = []
@@ -286,7 +295,10 @@ def process_run(
                     statuses=statuses,
                     error="; ".join(review_reasons) or None,
                 )
-                updates[item.excel_row] = dict(image_row.metrics)
+                updates[item.excel_row] = {
+                    **image_row.metrics,
+                    **dict.fromkeys(confirmed_blank_metrics),
+                }
                 stale[item.excel_row] = missing_metrics
                 warnings = warnings or row_status != "ready"
                 continue

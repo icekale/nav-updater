@@ -468,6 +468,106 @@ def test_process_run_routes_partial_ocr_metrics_to_manual_review() -> None:
     assert adapter.stale[item.excel_row] == missing_metrics
 
 
+def test_process_run_clears_confirmed_source_blank_metrics_without_review() -> None:
+    class CapturingAdapter:
+        updates: dict[int, dict[str, Decimal | None]]
+        stale: dict[int, set[str]]
+
+        def apply_updates(self, input_path, output_path, updates, stale) -> None:
+            self.updates = updates
+            self.stale = stale
+
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text,
+            ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)),
+            0.99,
+        )
+
+    class FakeTiledOCR:
+        def recognize_tiled(self, path: str) -> list[OCRToken]:
+            headers = [
+                "近一周(%)",
+                "MTD(%)",
+                "YTD(%)",
+                "2019(%)",
+                "2020(%)",
+                "2021(%)",
+                "2022(%)",
+                "2023(%)",
+                "2024(%)",
+                "2025(%)",
+                "近一年夏普比",
+                "近一年最大回撤(%)",
+            ]
+            values = ["1.00%", "--", "1.00%", "--", "1.00%"] + ["1.00%"] * 5 + [
+                "1.25",
+                "1.00%",
+            ]
+            return [
+                token("产品名称", 10, 10),
+                *(token(header, 100 + index * 100, 10) for index, header in enumerate(headers)),
+                token("产品A", 10, 50),
+                *(token(value, 100 + index * 100, 50) for index, value in enumerate(values)),
+            ]
+
+    class FailingProvider:
+        def resolve_by_name(self, product_name: str):
+            raise AssertionError(f"provider should not be called for {product_name}")
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    session.add_all(
+        [
+            RunFile(
+                run_id=run.id,
+                file_type="workbook",
+                original_name="template.xlsx",
+                storage_path="/tmp/template.xlsx",
+                sha256="0" * 64,
+            ),
+            RunFile(
+                run_id=run.id,
+                file_type="image",
+                original_name="report.png",
+                storage_path="/tmp/report.png",
+                sha256="1" * 64,
+            ),
+        ]
+    )
+    item = RunItem(
+        run_id=run.id,
+        excel_row=2,
+        original_values={"product_name": "产品A"},
+    )
+    session.add(item)
+    session.commit()
+    adapter = CapturingAdapter()
+
+    process_run(
+        session,
+        run.id,
+        ocr_service=FakeTiledOCR(),
+        provider=FailingProvider(),
+        adapter=adapter,
+    )
+
+    assert item.row_status == "ready"
+    assert item.metric_status["weekly"] == "extracted"
+    assert item.metric_status["mtd"] == "source_blank"
+    assert item.metric_status["annual_2019"] == "source_blank"
+    assert adapter.updates[item.excel_row]["mtd"] is None
+    assert adapter.updates[item.excel_row]["annual_2019"] is None
+    assert adapter.stale[item.excel_row] == set()
+
+
 def test_find_image_row_matches_unique_truncated_chinese_name() -> None:
     item_name = "浑瑾岳桐金选1号B"
     row = OCRMetricRow(

@@ -21,6 +21,7 @@ METRIC_KEYS = {
     "sharpe",
     "max_drawdown",
 }
+SOURCE_BLANK_MARKERS = {"-", "--", "—", "n/a"}
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class OCRMetricRow:
     product_code: str | None
     metrics: dict[str, Decimal]
     confidence: float
+    blank_metrics: frozenset[str] = frozenset()
 
 
 def group_rows(tokens: Iterable[OCRToken], y_tolerance: float = 12.0) -> list[ParsedRow]:
@@ -91,6 +93,10 @@ def parse_number(text: str) -> Decimal:
 
 def is_confident(confidence: float, threshold: float = 0.85) -> bool:
     return confidence >= threshold
+
+
+def _is_source_blank(text: str) -> bool:
+    return text.strip().replace(" ", "").lower() in SOURCE_BLANK_MARKERS
 
 
 def _header_key(text: str) -> str | None:
@@ -146,6 +152,7 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
                 else None
             )
             metrics: dict[str, Decimal] = {}
+            blank_metrics: set[str] = set()
             confidence = product_cell.confidence
             metric_cells = _metric_cells_by_header(
                 row.cells,
@@ -158,18 +165,23 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
                 cell = metric_cells.get(key)
                 if not cell:
                     continue
+                if _is_source_blank(cell.text):
+                    blank_metrics.add(key)
+                    confidence = min(confidence, cell.confidence)
+                    continue
                 try:
                     metrics[key] = _parse_metric_cell(key, cell.text)
                 except ValueError:
                     continue
                 confidence = min(confidence, cell.confidence)
-            if metrics:
+            if metrics or blank_metrics:
                 results.append(
                     OCRMetricRow(
                         product_name=product_cell.text,
                         product_code=code_cell.text if code_cell else None,
                         metrics=metrics,
                         confidence=confidence,
+                        blank_metrics=frozenset(blank_metrics),
                     )
                 )
     return results
@@ -256,10 +268,11 @@ def _metric_cells_by_header(
         if cell in excluded:
             continue
         key, left = min(headers, key=lambda item: (abs(cell.left - item[1]), item[1]))
-        try:
-            _parse_metric_cell(key, cell.text)
-        except ValueError:
-            continue
+        if not _is_source_blank(cell.text):
+            try:
+                _parse_metric_cell(key, cell.text)
+            except ValueError:
+                continue
         existing = assigned.get(key)
         if existing is None or abs(cell.left - left) < abs(existing.left - left):
             assigned[key] = cell

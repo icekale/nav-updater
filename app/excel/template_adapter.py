@@ -196,6 +196,8 @@ class TemplateAdapter:
                     cell = _find_or_create_cell(sheet, row_number, headers[metric], row_style)
                     if value is not None:
                         _set_numeric(cell, value.quantize(Decimal("0.01")))
+                    elif metric in values and metric not in stale.get(row_number, set()):
+                        _set_numeric(cell, None)
                     if metric in stale.get(row_number, set()) and error_style is not None:
                         cell.set("s", str(error_style))
             parts[SHEET_PATH] = etree.tostring(
