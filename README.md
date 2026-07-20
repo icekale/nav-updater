@@ -68,6 +68,28 @@ http://<部署主机局域网IP>:8080
 
 `app` 容器负责数据库迁移和网页服务，`worker` 容器负责处理任务，`db` 容器运行 PostgreSQL。数据库、上传文件和输出文件都保存在 Docker volume 中，重启容器不会清空历史。
 
+### 可选：使用 PaddleOCR-VL
+
+默认 `OCR_BACKEND=rapid`，截图只在本机 Docker 容器内由 RapidOCR 处理。若要启用 PaddleOCR-VL，请先确认截图可发送给外部服务，再只在 Unraid 的未提交 `.env` 中设置：
+
+```dotenv
+OCR_BACKEND=paddle
+PADDLE_OCR_TOKEN=在此填写Paddle访问令牌
+PADDLE_OCR_TIMEOUT_SECONDS=120
+```
+
+随后重新构建服务：
+
+```bash
+docker compose up -d --build
+```
+
+启用后，私募截图会提交至 PaddleOCR 的外部 API。令牌不要写入 Git、Excel、截图文件名或人工审核说明。API 返回错误、任务失败或超时时，批次会明确显示为处理失败且保留原 Excel；系统不会静默混用 RapidOCR 结果。
+
+Paddle 的表格结构识别可改善重复表头、列错位和 `-` 空值的识别，但产品名仍沿用现有保守匹配规则。名称带脚注、同管理人多产品或无法唯一匹配时会进入人工审核，不会自动覆盖数据。
+
+需要切回纯本地 OCR 时，将 `.env` 改回 `OCR_BACKEND=rapid` 并再次执行 `docker compose up -d --build`。
+
 ## 首次使用
 
 ### 1. 登录

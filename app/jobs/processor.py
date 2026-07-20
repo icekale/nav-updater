@@ -14,7 +14,7 @@ from ..domain.matching import CatalogRecord, match_product, normalize_name
 from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
 from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun
-from ..ocr.engine import OCRService
+from ..ocr.engine import OCRRecognizer, create_ocr_service
 from ..ocr.table_parser import OCRMetricRow, extract_metric_rows
 from ..providers.public_fund import PublicFundProvider
 from .service import (
@@ -223,7 +223,7 @@ def process_run(
     session: Session,
     run_id: int,
     *,
-    ocr_service: OCRService | None = None,
+    ocr_service: OCRRecognizer | None = None,
     provider: PublicFundProvider | None = None,
     adapter: TemplateAdapter | None = None,
     actor_id: int | None = None,
@@ -239,7 +239,7 @@ def process_run(
         actor_id = actor_id or run.operator_id
         adapter = adapter or TemplateAdapter()
         provider = provider or PublicFundProvider()
-        ocr_service = ocr_service or OCRService()
+        ocr_service = ocr_service or create_ocr_service()
         files = session.scalars(select(RunFile).where(RunFile.run_id == run_id)).all()
         workbook = next((item for item in files if item.file_type == "workbook"), None)
         if workbook is None:

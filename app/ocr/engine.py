@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import cv2
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
+
+from ..config import Settings, get_settings
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,14 @@ class OCRToken:
     @property
     def center_y(self) -> float:
         return sum(point[1] for point in self.box) / len(self.box)
+
+
+class OCRRecognizer(Protocol):
+    def recognize_tiled(self, image: str | Path) -> list[OCRToken]: ...
+
+
+class PaddleOCRConfigurationError(ValueError):
+    pass
 
 
 class OCRService:
@@ -75,6 +86,20 @@ class OCRService:
                 break
             offset_y += tile_height - overlap
         return _deduplicate_tokens(tokens)
+
+
+def create_ocr_service(settings: Settings | None = None) -> OCRRecognizer:
+    active_settings = settings or get_settings()
+    if active_settings.ocr_backend == "rapid":
+        return OCRService()
+    if not active_settings.paddle_ocr_token.strip():
+        raise PaddleOCRConfigurationError("PADDLE_OCR_TOKEN is required for OCR_BACKEND=paddle")
+    from .paddle import PaddleOCRService
+
+    return PaddleOCRService(
+        active_settings.paddle_ocr_token,
+        timeout_seconds=active_settings.paddle_ocr_timeout_seconds,
+    )
 
 
 def _load_image(image: str | Path | bytes | np.ndarray) -> np.ndarray:

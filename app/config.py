@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +12,9 @@ class Settings(BaseSettings):
     initial_admin_username: str = "admin"
     initial_admin_password: str = "change-me"
     public_fund_timeout_seconds: float = 15.0
+    ocr_backend: Literal["rapid", "paddle"] = "rapid"
+    paddle_ocr_token: str = ""
+    paddle_ocr_timeout_seconds: float = 120.0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
