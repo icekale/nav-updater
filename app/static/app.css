@@ -25,20 +25,35 @@ small { font-size: 12px; }
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dce3e9; }
 th, td { text-align: left; border-bottom: 1px solid #e8edf1; padding: 12px 14px; font-size: 13px; vertical-align: top; }
 th { background: #e8f0f6; color: #244d6f; font-weight: 700; }
-.status { display: inline-block; padding: 3px 7px; background: #eef3f6; color: #425c6f; border-radius: 3px; font-size: 12px; }
+.status { display: inline-block; padding: 3px 7px; background: #eef3f6; color: #425c6f; border-radius: 3px; font-size: 12px; white-space: nowrap; }
+.status-ready { background: #edf8f0; color: #245b37; }
+.status-needs_review { background: #fff7e8; color: #875b18; }
+.status-stale { background: #fff0f0; color: #a23c3c; }
+.status-failed { background: #fce8e8; color: #8a2525; }
 .error { color: #a23c3c; background: #fff0f0; padding: 10px; border-radius: 4px; }
 .actions { margin-top: 18px; }
 .actions .button { background: #e8edf1; color: #27435a; padding: 9px 14px; text-decoration: none; border-radius: 4px; }
 .actions form { margin-right: 10px; }
+.result-summary { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-top: 3px solid #1f5d89; border-bottom: 1px solid #dce3e9; background: #fff; margin-bottom: 18px; padding: 16px 18px; }
+.result-summary h2 { color: #193f67; font-size: 17px; margin: 0; }
+.result-summary .eyebrow { margin-bottom: 4px; }
+.result-summary-stats { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; color: #526b7d; font-size: 13px; }
+.result-summary-stats strong { color: #875b18; }
+.preview-table { min-width: 980px; }
+.preview-table .link-button.dark { font-weight: 700; text-decoration: none; }
 .review-item { border-top: 1px solid #dce3e9; padding: 24px 0; }
 .review-item-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .review-item h2 { color: #193f67; font-size: 17px; margin: 0; }
 .review-item-heading .muted { margin: 6px 0 0; }
 .review-reason { color: #7b4a22; font-size: 13px; margin: 14px 0; }
+.review-progress { color: #526b7d; font-size: 13px; font-weight: 600; margin: 12px 0 16px; }
 .review-summary { display: flex; align-items: center; gap: 12px; color: #71808c; font-size: 13px; margin: -12px 0 18px; }
 .review-summary a { color: #1f5d89; }
 .review-meta { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 2fr); gap: 16px; }
 .review-meta select, .review-meta textarea { width: 100%; }
+.review-metric-group { border-top: 1px solid #e8edf1; margin-top: 18px; padding-top: 16px; }
+.review-metric-group h3 { color: #244d6f; font-size: 14px; margin: 0 0 12px; }
+.review-metric-group.recognized h3 { color: #526b7d; }
 .review-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; margin-top: 4px; }
 .review-metrics label { font-size: 13px; margin-bottom: 0; }
 .review-metrics input { width: 100%; }
@@ -71,4 +86,4 @@ th { background: #e8f0f6; color: #244d6f; font-weight: 700; }
 .detail-copy { line-height: 1.7; margin: 0; white-space: pre-wrap; }
 .meeting-record { max-width: none; }
 @media (max-width: 900px) { .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .meeting-detail-grid { grid-template-columns: 1fr; } }
-@media (max-width: 700px) { .topbar { height: auto; min-height: 60px; align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px 20px; } nav { flex-wrap: wrap; gap: 12px; } .container { padding: 28px 16px 56px; } .page-heading { align-items: flex-start; flex-direction: column; } .review-meta, .filter-grid, .source-meta { grid-template-columns: 1fr; } .review-actions, .import-panel, .import-form { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 700px) { .topbar { height: auto; min-height: 60px; align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px 20px; } nav { flex-wrap: wrap; gap: 12px; } .container { padding: 28px 16px 56px; } .page-heading, .result-summary { align-items: flex-start; flex-direction: column; } .review-meta, .filter-grid, .source-meta { grid-template-columns: 1fr; } .review-actions, .import-panel, .import-form { align-items: flex-start; flex-direction: column; } }

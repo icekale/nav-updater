@@ -123,6 +123,8 @@ def test_login_catalog_upload_and_queue_run(tmp_path: Path) -> None:
         assert "仁桥金选泽源5B" in client.get("/catalog").text
 
         new_page = client.get("/updates/new")
+        assert "同一报告日期" in new_page.text
+        assert "不同周度请分别新建批次" in new_page.text
         token = re.search(r'name="token" value="([^"]+)"', new_page.text).group(1)
         workbook = Path("tests/fixtures/net_value_template.xlsx").read_bytes()
         created = client.post(
