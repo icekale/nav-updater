@@ -48,9 +48,10 @@ class OCRService:
         return self._engine
 
     def recognize(self, image: str | Path | bytes | np.ndarray) -> list[OCRToken]:
-        results, _ = self._get_engine()(image)
+        source = _load_image(image)
+        results, _ = self._get_engine()(source)
         if not results:
-            return []
+            return _detect_source_blank_tokens(source, [])
         tokens: list[OCRToken] = []
         for result in results:
             if len(result) < 3:
@@ -58,7 +59,7 @@ class OCRService:
             box, text, confidence = result[0], str(result[1]), float(result[2])
             normalized_box = tuple(tuple(float(value) for value in point) for point in box)
             tokens.append(OCRToken(text=text.strip(), box=normalized_box, confidence=confidence))
-        return tokens
+        return [*tokens, *_detect_source_blank_tokens(source, tokens)]
 
     def recognize_tiled(
         self,
@@ -112,6 +113,45 @@ def _load_image(image: str | Path | bytes | np.ndarray) -> np.ndarray:
     if loaded is None:
         raise ValueError("unable to read OCR image")
     return loaded
+
+
+def _detect_source_blank_tokens(image: np.ndarray, existing: list[OCRToken]) -> list[OCRToken]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    blanks: list[OCRToken] = []
+    for left, top, width, height, _ in stats[1:count]:
+        if not (6 <= width <= 80 and 1 <= height <= 6 and width >= height * 3):
+            continue
+        if _overlaps_recognized_text(left, top, width, height, existing):
+            continue
+        blanks.append(
+            OCRToken(
+                text="-",
+                box=(
+                    (float(left), float(top)),
+                    (float(left + width), float(top)),
+                    (float(left + width), float(top + height)),
+                    (float(left), float(top + height)),
+                ),
+                confidence=1.0,
+            )
+        )
+    return blanks
+
+
+def _overlaps_recognized_text(
+    left: int, top: int, width: int, height: int, existing: list[OCRToken]
+) -> bool:
+    right = left + width
+    bottom = top + height
+    return any(
+        left < max(point[0] for point in token.box) + 4
+        and right > min(point[0] for point in token.box) - 4
+        and top < max(point[1] for point in token.box) + 4
+        and bottom > min(point[1] for point in token.box) - 4
+        for token in existing
+    )
 
 
 def _shift_token(token: OCRToken, offset_y: int) -> OCRToken:

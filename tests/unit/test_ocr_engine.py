@@ -1,5 +1,7 @@
+import cv2
 import numpy as np
 
+from app.ocr import engine
 from app.ocr.engine import OCRService, OCRToken
 
 
@@ -34,3 +36,29 @@ def test_recognize_tiled_offsets_tokens_and_keeps_best_overlap_token(monkeypatch
         ("中段", 2482.0, 0.99),
         ("末段", 4954.0, 0.99),
     ]
+
+
+def test_detect_source_blank_tokens_keeps_an_isolated_dash() -> None:
+    image = np.full((80, 200, 3), 255, dtype=np.uint8)
+    cv2.line(image, (110, 42), (126, 42), (0, 0, 0), 2)
+
+    detected = engine._detect_source_blank_tokens(image, [])
+
+    assert len(detected) == 1
+    assert detected[0].text == "-"
+    assert detected[0].left == 109.0
+    assert detected[0].top == 41.0
+
+
+def test_detect_source_blank_tokens_ignores_dash_inside_recognized_text() -> None:
+    image = np.full((80, 200, 3), 255, dtype=np.uint8)
+    cv2.line(image, (110, 42), (126, 42), (0, 0, 0), 2)
+    existing = [
+        OCRToken(
+            "-12.95%",
+            ((106.0, 38.0), (150.0, 38.0), (150.0, 52.0), (106.0, 52.0)),
+            0.99,
+        )
+    ]
+
+    assert engine._detect_source_blank_tokens(image, existing) == []
