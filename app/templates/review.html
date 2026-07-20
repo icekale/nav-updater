@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">RUN #{{ run.id }}</p><h1>人工审核</h1><p class="muted">截止日：{{ run.cutoff_date }} · 每条审核独立保存，已保存的数据在重新生成时优先使用。</p></div><a class="button" href="/updates/{{ run.id }}/preview">返回匹配预览</a></div>
+<p class="review-summary">待处理 {{ pending_count }} 条 · {% if show_all %}<a href="/updates/{{ run.id }}/review">仅看待审核</a>{% else %}<a href="/updates/{{ run.id }}/review?show_all=1">显示已识别完整条目</a>{% endif %}</p>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 {% for row in review_rows %}
 {% set item = row.item %}
@@ -9,11 +10,11 @@
   <div class="review-item-heading"><div><h2>{{ item.original_values.get('product_name', '') }}</h2><p class="muted">Excel 第 {{ item.excel_row }} 行 · 来源：{{ item.match_source }} · 状态：{{ item.row_status }}</p></div><span class="status">{{ item.row_status }}</span></div>
   {% if item.error_reason %}<p class="review-reason">{{ item.error_reason }}</p>{% endif %}
   <div class="review-meta">
-    <label>确认产品<select name="product_id" required><option value="">请选择产品</option>{% for product in products %}<option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>{{ product.product_code }} · {{ product.product_name }}</option>{% endfor %}</select></label>
-    <label>审核说明<textarea name="review_note" rows="2" required placeholder="例如：以管理人 7 月 17 日净值表为准">{% if item.match_source == 'manual' %}{{ item.error_reason.replace('人工审核：', '', 1) if item.error_reason else '' }}{% endif %}</textarea></label>
+    <label>确认产品<select name="product_choice" required><option value="" {% if not row.selected_choice %}selected{% endif %}>请选择产品</option>{% if row.can_create_private %}<option value="create_private" {% if row.selected_choice == 'create_private' %}selected{% endif %}>自动创建私募产品：{{ item.original_values.get('product_name', '') }}</option>{% endif %}{% for product in products %}<option value="product:{{ product.id }}" {% if row.selected_choice == 'product:' ~ product.id %}selected{% endif %}>{{ product.product_code }} · {{ product.product_name }}</option>{% endfor %}</select></label>
+    <label>审核说明<textarea name="review_note" rows="2" required placeholder="例如：以管理人 7 月 17 日净值表为准">{{ row.review_note }}</textarea></label>
   </div>
-  <div class="review-metrics">{% for field in metric_fields %}<label>{{ field.label }}<input type="text" name="{{ field.name }}" inputmode="decimal" value="{{ row.metric_values[field.name] }}" placeholder="{% if field.is_percent %}百分比数值{% else %}数值{% endif %}"></label>{% endfor %}</div>
+  <div class="review-metrics">{% for field in metric_fields %}<label class="metric-field{% if field.name in row.missing_metrics %} missing{% endif %}">{{ field.label }}{% if field.name in row.missing_metrics %}<span class="metric-flag">待补</span>{% endif %}<input type="text" name="{{ field.name }}" inputmode="decimal" value="{{ row.metric_values[field.name] }}" placeholder="{% if field.is_percent %}百分比数值{% else %}数值{% endif %}"></label>{% endfor %}</div>
   <div class="review-actions"><small>至少填写一个指标。百分比字段填写 12.34 即表示 12.34%；留空字段会保留原 Excel 值并标红。</small><button class="primary" type="submit">保存审核</button></div>
 </form>
-{% else %}<p class="muted">该批次没有可审核的产品行。</p>{% endfor %}
+{% else %}<p class="muted">{% if show_all %}该批次没有产品行。{% else %}当前没有待审核条目。{% endif %}</p>{% endfor %}
 {% endblock %}

@@ -516,28 +516,33 @@ def create_app(
         draft: Mapping[str, str] | None,
     ) -> dict[str, object]:
         source_name = str(item.original_values.get("product_name", ""))
-        selected_choice = ""
+        default_choice = ""
         can_create_private = False
-        if draft is not None:
-            selected_choice = draft.get("product_choice", "")
-        elif item.product_id in products_by_id:
-            selected_choice = f"product:{item.product_id}"
+        if item.product_id in products_by_id:
+            default_choice = f"product:{item.product_id}"
         else:
             matches = matching_active_products(session, source_name)
             if len(matches) == 1:
-                selected_choice = f"product:{matches[0].id}"
+                default_choice = f"product:{matches[0].id}"
             elif not matches:
-                selected_choice = "create_private"
+                default_choice = "create_private"
                 can_create_private = True
         values = formatted_metric_values(item)
         if draft is not None:
             values = {field.name: draft.get(field.name, "") for field in METRIC_FIELDS}
+        review_note = ""
+        if item.match_source == "manual" and item.error_reason:
+            review_note = item.error_reason.removeprefix("人工审核：")
+        if draft is not None:
+            review_note = draft.get("review_note", "")
         return {
             "item": item,
             "metric_values": values,
-            "selected_choice": selected_choice,
+            "selected_choice": draft.get("product_choice", default_choice)
+            if draft is not None
+            else default_choice,
             "can_create_private": can_create_private,
-            "review_note": draft.get("review_note", "") if draft is not None else "",
+            "review_note": review_note,
             "missing_metrics": {
                 field.name
                 for field in METRIC_FIELDS
@@ -586,7 +591,7 @@ def create_app(
         form = await request.form()
         inputs = {field.name: form.get(field.name, "") for field in METRIC_FIELDS}
         draft = {
-            **{field.name: str(value) for field, value in zip(METRIC_FIELDS, inputs.values())},
+            **{key: str(value) for key, value in inputs.items()},
             "product_choice": product_choice,
             "review_note": review_note,
         }

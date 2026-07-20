@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.catalog import private_product_code
 from app.config import Settings
 from app.db import Base
 from app.main import create_app
@@ -389,6 +390,11 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
         review = client.get(f"/updates/{run_id}/review")
         assert "测试私募1号" in review.text
         assert "完整产品" not in review.text
+        assert f'/updates/{run_id}/review?show_all=1' in review.text
+        assert 'value="create_private" selected' in review.text
+        assert 'class="metric-field missing"' in review.text
+        all_items = client.get(f"/updates/{run_id}/review?show_all=1")
+        assert "完整产品" in all_items.text
         token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
         saved = client.post(
             f"/updates/{run_id}/items/{item_id}/review",
@@ -412,6 +418,75 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
         assert session.query(AuditLog).filter_by(action="manual_review").count() == 1
     finally:
         session.close()
+
+
+def test_review_keeps_submitted_values_after_private_code_conflict(tmp_path: Path) -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+
+    with TestClient(create_app(settings=settings, session_factory=factory)) as client:
+        login_page = client.get("/login")
+        token = re.search(r'name="token" value="([^"]+)"', login_page.text).group(1)
+        client.post(
+            "/login",
+            data={"username": "admin", "password": "change-me", "token": token},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            product_name = "测试私募冲突"
+            session.add(
+                Product(
+                    product_name="其他产品",
+                    product_code=private_product_code(product_name),
+                    product_type="private",
+                )
+            )
+            run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="completed")
+            session.add(run)
+            session.flush()
+            item = RunItem(
+                run_id=run.id,
+                excel_row=2,
+                original_values={"product_name": product_name},
+                row_status="needs_review",
+            )
+            session.add(item)
+            session.commit()
+            run_id = run.id
+            item_id = item.id
+        finally:
+            session.close()
+
+        review = client.get(f"/updates/{run_id}/review")
+        token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
+        failed = client.post(
+            f"/updates/{run_id}/items/{item_id}/review",
+            data={
+                "token": token,
+                "product_choice": "create_private",
+                "weekly": "1.23",
+                "review_note": "保留这段说明",
+            },
+        )
+
+    assert failed.status_code == 422
+    assert 'value="1.23"' in failed.text
+    assert "保留这段说明" in failed.text
+    assert 'value="create_private" selected' in failed.text
 
 
 def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
@@ -483,7 +558,7 @@ def test_user_can_manually_review_and_regenerate_a_run(tmp_path: Path) -> None:
         assert review.status_code == 200
         assert "人工审核" in review.text
         token = re.search(r'name="token" value="([^"]+)"', review.text).group(1)
-        product_id = re.search(r'<option value="(\d+)"[^>]*>P001', review.text).group(1)
+        product_id = re.search(r'<option value="product:(\d+)"[^>]*>P001', review.text).group(1)
         item_id = re.search(rf'action="/updates/{run_id}/items/(\d+)/review"', review.text).group(1)
 
         reviewed = client.post(
