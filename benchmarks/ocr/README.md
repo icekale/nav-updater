@@ -25,7 +25,7 @@ shasum -a 256 /path/to/weekly-report.png
 ## 运行
 
 ```bash
-python scripts/run_ocr_benchmark.py \
+.venv/bin/python scripts/run_ocr_benchmark.py \
   --labels /secure/ocr-labels.json \
   --images-root /secure/weekly-reports \
   --output-dir /secure/ocr-results/2026-07-20
@@ -33,7 +33,17 @@ python scripts/run_ocr_benchmark.py \
 
 命令先校验所有图片 SHA-256，再对每张图片仅识别一次。输出目录必须为空，完成后会生成：
 
-- `summary.md`：产品匹配率、字段准确率、漏识别率和错列率；
+- `summary.md`：产品匹配率、字段准确率、漏识别率、错列率和源空值识别率；
 - `details.json`：逐产品、逐字段的结果，便于分析错例。
 
 它不会修改数据库、处理历史、Excel 或源图片。
+
+## 上线门槛
+
+RapidOCR 规则上线前，使用同一份经研究员确认的标签运行基准，且必须同时满足：
+
+- 产品匹配率不低于 90%；
+- 字段准确率不低于 98%；
+- 源空值识别率不低于 95%；
+- 错列数为 0；
+- 包含两个同前缀产品的歧义样本不得自动匹配或写入。

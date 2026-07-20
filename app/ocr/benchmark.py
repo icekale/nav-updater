@@ -39,6 +39,7 @@ class BenchmarkCaseResult:
     wrong_fields: int
     wrong_column_fields: int
     field_outcomes: Mapping[str, str]
+    expected_blank_metrics: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,22 @@ class BenchmarkReport:
     def total_fields(self) -> int:
         return self.correct_fields + self.missed_fields + self.wrong_fields
 
+    @property
+    def source_blanks(self) -> int:
+        return sum(len(result.expected_blank_metrics) for result in self.results)
+
+    @property
+    def correct_source_blanks(self) -> int:
+        return sum(
+            result.field_outcomes.get(metric) == "correct"
+            for result in self.results
+            for metric in result.expected_blank_metrics
+        )
+
+    @property
+    def source_blank_recall(self) -> float:
+        return _rate(self.correct_source_blanks, self.source_blanks)
+
 
 def evaluate_cases(
     cases: Iterable[BenchmarkCase], rows_by_image: Mapping[str, list[OCRMetricRow]]
@@ -87,6 +104,9 @@ def evaluate_cases(
                     wrong_fields=0,
                     wrong_column_fields=0,
                     field_outcomes=dict.fromkeys(case.metrics, "product_unmatched"),
+                    expected_blank_metrics=frozenset(
+                        metric for metric, expected in case.metrics.items() if expected is None
+                    ),
                 )
             )
             continue
@@ -132,6 +152,9 @@ def evaluate_cases(
                 wrong_fields=wrong_fields,
                 wrong_column_fields=wrong_column_fields,
                 field_outcomes=field_outcomes,
+                expected_blank_metrics=frozenset(
+                    metric for metric, expected in case.metrics.items() if expected is None
+                ),
             )
         )
     return BenchmarkReport(tuple(results))
@@ -187,6 +210,9 @@ def report_as_dict(report: BenchmarkReport) -> dict[str, object]:
             "wrong_fields": report.wrong_fields,
             "wrong_column_fields": report.wrong_column_fields,
             "wrong_column_rate": _rate(report.wrong_column_fields, report.total_fields),
+            "source_blanks": report.source_blanks,
+            "correct_source_blanks": report.correct_source_blanks,
+            "source_blank_recall": report.source_blank_recall,
         },
         "cases": [
             {
@@ -227,6 +253,10 @@ def render_markdown(report: BenchmarkReport) -> str:
         (
             f"- 错列率：{totals['wrong_column_rate']:.2%}"
             f"（{totals['wrong_column_fields']} / {totals['fields']}）"
+        ),
+        (
+            f"- 源空值识别率：{totals['source_blank_recall']:.2%}"
+            f"（{totals['correct_source_blanks']} / {totals['source_blanks']}）"
         ),
         "",
         "## 分图片",

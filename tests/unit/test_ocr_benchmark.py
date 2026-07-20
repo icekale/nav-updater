@@ -37,6 +37,32 @@ def test_evaluate_cases_counts_numeric_and_confirmed_blank_fields() -> None:
     assert report.wrong_column_fields == 0
 
 
+def test_benchmark_report_exposes_confirmed_source_blank_recall() -> None:
+    from app.ocr.benchmark import BenchmarkCase, evaluate_cases, render_markdown, report_as_dict
+
+    case = BenchmarkCase(
+        image="report.png",
+        sha256="a" * 64,
+        product_name="产品A",
+        metrics={"weekly": Decimal("0.01"), "mtd": None},
+    )
+    row = OCRMetricRow(
+        product_name="产品A",
+        product_code=None,
+        metrics={"weekly": Decimal("0.01")},
+        confidence=0.99,
+        blank_metrics=frozenset({"mtd"}),
+    )
+
+    report = evaluate_cases([case], {"report.png": [row]})
+    totals = report_as_dict(report)["totals"]
+
+    assert totals["source_blanks"] == 1
+    assert totals["correct_source_blanks"] == 1
+    assert totals["source_blank_recall"] == 1.0
+    assert "源空值识别率" in render_markdown(report)
+
+
 def test_evaluate_cases_flags_value_found_in_a_different_metric_column() -> None:
     from app.ocr.benchmark import BenchmarkCase, evaluate_cases
 
@@ -179,6 +205,9 @@ def test_run_benchmark_writes_reports_without_changing_source_image(tmp_path: Pa
             "wrong_fields": 0,
             "wrong_column_fields": 0,
             "wrong_column_rate": 0.0,
+            "source_blanks": 0,
+            "correct_source_blanks": 0,
+            "source_blank_recall": 0.0,
         },
         "cases": [
             {
