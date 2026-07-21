@@ -20,6 +20,7 @@ from app.main import create_app
 from app.models import (
     AuditLog,
     Meeting,
+    OcrRegressionSample,
     OcrReviewSample,
     Product,
     RunFile,
@@ -234,6 +235,51 @@ def test_run_deletion_cascades_ocr_review_samples(tmp_path: Path) -> None:
             assert session.query(OcrReviewSample).count() == 0
         finally:
             session.close()
+
+
+def test_regression_sample_survives_run_delete(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        sample_path = tmp_path / "ocr-quality" / "samples" / "sample.png"
+        sample_path.parent.mkdir(parents=True)
+        sample_path.write_bytes(b"sample")
+        session = factory()
+        try:
+            session.add(
+                OcrRegressionSample(
+                    image_path=str(sample_path),
+                    image_sha256="a" * 64,
+                    source_run_id=run_id,
+                    source_item_id=item_id,
+                    source_label="管理员复核案例",
+                    excel_product_name="产品A",
+                    candidate_names=["产品A"],
+                    expected_metric_values={"mtd": "-0.0633"},
+                    expected_metric_status={"mtd": "extracted"},
+                    note="确认",
+                    is_active=True,
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+        deleted = client.post(
+            f"/updates/{run_id}/delete",
+            data={"token": _token(client, "/updates")},
+            follow_redirects=False,
+        )
+
+    assert deleted.status_code == 303
+    session = factory()
+    try:
+        sample = session.query(OcrRegressionSample).one()
+        assert sample.source_run_id is None
+        assert sample.source_item_id is None
+        assert Path(sample.image_path).exists()
+    finally:
+        session.close()
 
 
 def test_batch_requeue_moves_each_completed_run_back_to_the_queue(tmp_path: Path) -> None:

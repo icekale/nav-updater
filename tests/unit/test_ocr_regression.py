@@ -1,4 +1,28 @@
-from app.models import OcrRegressionResult, OcrRegressionRun, OcrRegressionSample, RunItem
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.db import Base
+from app.models import (
+    OcrRegressionResult,
+    OcrRegressionRun,
+    OcrRegressionSample,
+    OcrReviewSample,
+    Product,
+    RunFile,
+    RunItem,
+    UpdateRun,
+    User,
+)
+from app.ocr.regression import (
+    copy_sample_image,
+    import_confirmed_samples,
+    promote_confirmed_case,
+    promote_review_sample,
+)
 
 
 def test_regression_models_keep_sample_when_source_run_is_deleted() -> None:
@@ -8,3 +32,137 @@ def test_regression_models_keep_sample_when_source_run_is_deleted() -> None:
     assert "ocr_evidence" in RunItem.__table__.c
     assert OcrRegressionSample.source_run_id.property.columns[0].nullable is True
     assert OcrRegressionSample.created_at.default is not None
+
+
+def test_copy_sample_image_deduplicates_by_sha256(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(b"same-image")
+    second.write_bytes(b"same-image")
+
+    first_copy = copy_sample_image(first, tmp_path / "samples")
+    second_copy = copy_sample_image(second, tmp_path / "samples")
+
+    assert first_copy.sha256 == second_copy.sha256
+    assert first_copy.path == second_copy.path
+    assert first_copy.path.read_bytes() == b"same-image"
+
+
+def _review_sample_session(tmp_path: Path, *, image_count: int = 1):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    product = Product(product_name="浑瑾岳桐金选1号B", product_code="P001", product_type="private")
+    session.add_all([admin, product])
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="completed")
+    session.add(run)
+    session.flush()
+    image_files = []
+    for index in range(image_count):
+        image_path = tmp_path / f"report-{index}.png"
+        image_path.write_bytes(f"image-{index}".encode())
+        image_files.append(
+            RunFile(
+                run_id=run.id,
+                file_type="image",
+                original_name=image_path.name,
+                storage_path=str(image_path),
+                sha256="0" * 64,
+            )
+        )
+    session.add_all(image_files)
+    session.flush()
+    item = RunItem(
+        run_id=run.id,
+        excel_row=3,
+        product_id=product.id,
+        match_source="image",
+        row_status="stale",
+        original_values={"product_name": product.product_name},
+        metric_values={"mtd": ""},
+        metric_status={"mtd": "source_blank"},
+    )
+    session.add(item)
+    session.flush()
+    review_sample = OcrReviewSample(
+        run_id=run.id,
+        run_item_id=item.id,
+        actor_id=admin.id,
+        product_id=product.id,
+        excel_product_name=product.product_name,
+        review_version=1,
+        ocr_match_source="image",
+        ocr_product_id=product.id,
+        ocr_metric_values={"mtd": ""},
+        ocr_metric_status={"mtd": "source_blank"},
+        confirmed_metric_values={"mtd": "-0.0633"},
+        confirmed_metric_status={"mtd": "manual"},
+        review_note="批次 #12 复核",
+    )
+    session.add(review_sample)
+    session.commit()
+    return session, admin, product, run, item, review_sample, image_files
+
+
+def test_promote_review_sample_copies_image_and_keeps_expected_values(tmp_path: Path) -> None:
+    session, admin, product, run, item, review_sample, image_files = _review_sample_session(
+        tmp_path
+    )
+    promoted = promote_review_sample(
+        session,
+        sample_id=review_sample.id,
+        samples_root=tmp_path / "samples",
+        actor_id=admin.id,
+    )
+
+    assert promoted.expected_metric_values["mtd"] == "-0.0633"
+    assert Path(promoted.image_path).exists()
+    assert promoted.source_run_id == run.id
+    assert promoted.source_item_id == item.id
+    assert promoted.expected_product_code == product.product_code
+    assert Path(promoted.image_path).read_bytes() == Path(image_files[0].storage_path).read_bytes()
+
+
+def test_import_history_skips_multi_image_run_without_source_choice(tmp_path: Path) -> None:
+    session, admin, _, run, _, _, _ = _review_sample_session(tmp_path, image_count=2)
+    result = import_confirmed_samples(
+        session,
+        run_id=run.id,
+        samples_root=tmp_path / "samples",
+        actor_id=admin.id,
+    )
+
+    assert result.needs_image_choice == 1
+    assert result.created == 0
+
+
+def test_promote_case_deduplicates_same_image_product_and_expected_values(tmp_path: Path) -> None:
+    session, admin, product, run, item, _, image_files = _review_sample_session(tmp_path)
+    values = {"mtd": Decimal("-0.0633")}
+    statuses = {"mtd": "extracted"}
+    first = promote_confirmed_case(
+        session,
+        item_id=item.id,
+        expected_metric_values=values,
+        expected_metric_status=statuses,
+        note="批次 #12 重跑确认",
+        samples_root=tmp_path / "samples",
+        actor_id=admin.id,
+        source_file_id=image_files[0].id,
+    )
+    second = promote_confirmed_case(
+        session,
+        item_id=item.id,
+        expected_metric_values=values,
+        expected_metric_status=statuses,
+        note="批次 #12 重跑确认",
+        samples_root=tmp_path / "samples",
+        actor_id=admin.id,
+        source_file_id=image_files[0].id,
+    )
+
+    assert first.id == second.id
+    assert second.expected_product_code == product.product_code
+    assert second.source_run_id == run.id
