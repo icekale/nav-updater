@@ -103,6 +103,7 @@ class RunItem(Base):
     row_status: Mapped[str] = mapped_column(String(30), default="needs_review")
     metric_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     metric_status: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    ocr_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error_reason: Mapped[str | None] = mapped_column(Text)
     original_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
@@ -137,6 +138,73 @@ class OcrReviewSample(Base):
     run: Mapped[UpdateRun] = relationship(back_populates="quality_samples")
     run_item: Mapped[RunItem] = relationship(back_populates="quality_samples")
     product: Mapped[Product | None] = relationship(foreign_keys=[product_id])
+
+
+class OcrRegressionSample(Base):
+    __tablename__ = "ocr_regression_samples"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    image_path: Mapped[str] = mapped_column(Text)
+    image_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    source_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("update_runs.id", ondelete="SET NULL"), index=True
+    )
+    source_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("run_items.id", ondelete="SET NULL"), index=True
+    )
+    source_label: Mapped[str] = mapped_column(String(80))
+    excel_product_name: Mapped[str] = mapped_column(String(255))
+    candidate_names: Mapped[list[str]] = mapped_column(JSON, default=list)
+    expected_product_code: Mapped[str | None] = mapped_column(String(100))
+    expected_metric_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    expected_metric_status: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    note: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    is_active: Mapped[bool] = mapped_column(default=True, index=True)
+
+    source_run: Mapped[UpdateRun | None] = relationship(foreign_keys=[source_run_id])
+    source_item: Mapped[RunItem | None] = relationship(foreign_keys=[source_item_id])
+
+
+class OcrRegressionRun(Base):
+    __tablename__ = "ocr_regression_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    total_count: Mapped[int] = mapped_column(default=0)
+    passed_count: Mapped[int] = mapped_column(default=0)
+    failed_count: Mapped[int] = mapped_column(default=0)
+    skipped_count: Mapped[int] = mapped_column(default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    results: Mapped[list[OcrRegressionResult]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class OcrRegressionResult(Base):
+    __tablename__ = "ocr_regression_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("ocr_regression_runs.id", ondelete="CASCADE"), index=True
+    )
+    sample_id: Mapped[int] = mapped_column(ForeignKey("ocr_regression_samples.id"), index=True)
+    outcome: Mapped[str] = mapped_column(String(30))
+    expected: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    actual: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    detail: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    run: Mapped[OcrRegressionRun] = relationship(back_populates="results")
+    sample: Mapped[OcrRegressionSample] = relationship()
 
 
 class AuditLog(Base):
