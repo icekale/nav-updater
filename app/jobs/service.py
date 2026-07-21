@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from ..domain.metrics import calculate_max_drawdown, calculate_returns, calculat
 from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
 from ..models import AuditLog, RunFile, RunItem, UpdateRun
+from ..time import china_now as utcnow
 
 RUN_READY = "uploaded"
 RUN_PROCESSING = "processing"
@@ -33,10 +34,6 @@ class BatchRunResult:
     deleted: int = 0
     skipped_processing: int = 0
     missing: int = 0
-
-
-def utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)

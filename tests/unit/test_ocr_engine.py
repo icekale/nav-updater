@@ -38,6 +38,22 @@ def test_recognize_tiled_offsets_tokens_and_keeps_best_overlap_token(monkeypatch
     ]
 
 
+def test_recognize_tiled_uses_smaller_default_tiles_for_dense_reports(monkeypatch) -> None:
+    image = np.zeros((5000, 20, 3), dtype=np.uint8)
+    service = OCRService()
+    tile_heights: list[int] = []
+
+    def recognize(crop):
+        tile_heights.append(crop.shape[0])
+        return []
+
+    monkeypatch.setattr(service, "recognize", recognize)
+
+    service.recognize_tiled(image)
+
+    assert tile_heights == [1600, 1600, 1600, 584]
+
+
 def test_detect_source_blank_tokens_keeps_an_isolated_dash() -> None:
     image = np.full((80, 200, 3), 255, dtype=np.uint8)
     cv2.line(image, (110, 42), (126, 42), (0, 0, 0), 2)

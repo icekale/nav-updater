@@ -65,7 +65,7 @@ class OCRService:
         self,
         image: str | Path | bytes | np.ndarray,
         *,
-        tile_height: int = 2600,
+        tile_height: int = 1600,
         overlap: int = 128,
     ) -> list[OCRToken]:
         if tile_height <= 0 or overlap < 0 or overlap >= tile_height:

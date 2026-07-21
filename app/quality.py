@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from .jobs.review import METRIC_FIELDS
 from .models import OcrReviewSample, Product, RunItem, UpdateRun
+from .time import china_now
 
 REVIEWABLE_STATUSES = {"needs_review", "stale", "failed"}
 
@@ -50,7 +51,7 @@ class QualityDashboard:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+    return china_now()
 
 
 def _accuracy(matched_count: int, confirmed_count: int) -> Decimal | None:
