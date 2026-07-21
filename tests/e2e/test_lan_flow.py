@@ -230,7 +230,10 @@ def test_batch_delete_preserves_processing_run_and_deletes_completed_runs(
     with TestClient(app) as client:
         _login_as_admin(client)
         completed_id, _, completed_dir, _ = _create_run_with_artifacts(
-            factory, tmp_path, directory="batch-delete"
+            factory, tmp_path, directory="batch-delete-a"
+        )
+        second_completed_id, _, second_completed_dir, _ = _create_run_with_artifacts(
+            factory, tmp_path, directory="batch-delete-b"
         )
         processing_id, _, processing_dir, _ = _create_run_with_artifacts(
             factory, tmp_path, status="processing", directory="batch-processing"
@@ -241,24 +244,29 @@ def test_batch_delete_preserves_processing_run_and_deletes_completed_runs(
             data={
                 "token": _token(client, "/updates"),
                 "action": "delete",
-                "run_ids": [str(completed_id), str(processing_id)],
+                "run_ids": [str(completed_id), str(second_completed_id), str(processing_id)],
             },
             follow_redirects=False,
         )
         history = client.get(response.headers["location"])
 
     assert response.status_code == 303
-    assert "已删除 1 个批次，跳过处理中 1 个" in history.text
+    assert "已删除 2 个批次，跳过处理中 1 个" in history.text
     session = factory()
     try:
         assert session.get(UpdateRun, completed_id) is None
+        assert session.get(UpdateRun, second_completed_id) is None
         assert session.get(UpdateRun, processing_id) is not None
         assert session.query(AuditLog).filter_by(
             action="delete", object_type="update_run", object_id=str(completed_id)
         ).count() == 1
+        assert session.query(AuditLog).filter_by(
+            action="delete", object_type="update_run", object_id=str(second_completed_id)
+        ).count() == 1
     finally:
         session.close()
     assert not completed_dir.exists()
+    assert not second_completed_dir.exists()
     assert processing_dir.exists()
 
 
