@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -37,6 +38,7 @@ from .jobs.processor import ALL_METRICS, METRIC_LABELS
 from .jobs.review import (
     METRIC_FIELDS,
     ManualReviewError,
+    capture_ocr_review_sample,
     formatted_metric_values,
     parse_manual_metrics,
     save_manual_review,
@@ -753,7 +755,7 @@ def create_app(
         try:
             if not review_note.strip():
                 raise ManualReviewError("审核说明不能为空")
-            parse_manual_metrics(inputs)
+            values = parse_manual_metrics(inputs)
         except ManualReviewError as exc:
             return review_response(
                 request,
@@ -784,12 +786,22 @@ def create_app(
                     raise ManualReviewError("请选择有效产品")
             else:
                 raise ManualReviewError("请选择有效产品")
+            capture_ocr_review_sample(
+                session,
+                run_id=run.id,
+                item=item,
+                actor_id=user.id,
+                product=product,
+                values=values,
+                note=review_note,
+            )
             reviewed = save_manual_review(
                 session,
                 item=item,
                 product=product,
                 inputs=inputs,
                 note=review_note,
+                values=values,
             )
         except (ManualReviewError, PrivateProductError) as exc:
             return review_response(
@@ -829,7 +841,20 @@ def create_app(
                 },
             )
         )
-        session.commit()
+        try:
+            session.commit()
+        except SQLAlchemyError:
+            session.rollback()
+            return review_response(
+                request,
+                run,
+                session,
+                user,
+                error="保存审核失败，请重试",
+                status_code=500,
+                draft_item_id=item_id,
+                draft=draft,
+            )
         return RedirectResponse(f"/updates/{run_id}/review", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/updates/{run_id}/process")

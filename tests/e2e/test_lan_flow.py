@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -446,6 +447,43 @@ def test_batch_requeue_does_not_commit_without_its_audit_log(tmp_path: Path) -> 
             .count()
             == 0
         )
+    finally:
+        session.close()
+
+
+def test_review_sample_is_atomic_when_sample_write_fails(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login_as_admin(client)
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        token = _token(client, f"/updates/{run_id}/review")
+
+        def reject_sample(active_session) -> None:
+            if active_session.query(OcrReviewSample).count():
+                raise SQLAlchemyError("sample write failed")
+
+        event.listen(factory.class_, "before_commit", reject_sample)
+        try:
+            response = client.post(
+                f"/updates/{run_id}/items/{item_id}/review",
+                data={
+                    "token": token,
+                    "product_choice": "create_private",
+                    "review_note": "以管理人净值表为准",
+                    "weekly": "1.23",
+                },
+            )
+        finally:
+            event.remove(factory.class_, "before_commit", reject_sample)
+
+    assert response.status_code == 500
+    assert "保存审核失败，请重试" in response.text
+    session = factory()
+    try:
+        item = session.get(RunItem, item_id)
+        assert item is not None
+        assert item.match_source != "manual"
+        assert session.query(OcrReviewSample).filter_by(run_item_id=item_id).count() == 0
     finally:
         session.close()
 

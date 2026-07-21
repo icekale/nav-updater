@@ -22,7 +22,16 @@ from app.jobs.service import (
     lock_run_item,
     metric_values_from_nav,
 )
-from app.models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun, User
+from app.models import (
+    AuditLog,
+    NavObservation,
+    OcrReviewSample,
+    Product,
+    RunFile,
+    RunItem,
+    UpdateRun,
+    User,
+)
 from app.ocr.engine import OCRToken
 from app.ocr.table_parser import OCRMetricRow
 from app.providers.public_fund import PublicFundRecord
@@ -207,6 +216,79 @@ def test_save_manual_review_converts_percentages_and_marks_missing_values_stale(
     assert reviewed.metric_status["weekly"] == "manual"
     assert reviewed.metric_status["mtd"] == "stale"
     assert reviewed.error_reason == "人工审核：以管理人 7 月 17 日净值表为准"
+
+
+def test_capture_ocr_review_sample_versions_and_skips_public_provider() -> None:
+    from app.jobs import review
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    product = Product(product_name="仁桥金选泽源5B", product_code="P001", product_type="private")
+    session.add_all([admin, product])
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    item = RunItem(
+        run_id=run.id,
+        excel_row=2,
+        product_id=product.id,
+        match_source="image",
+        original_values={"product_name": "仁桥金选泽源5B"},
+        metric_values={"weekly": "0.01"},
+        metric_status={"weekly": "extracted"},
+    )
+    public_item = RunItem(
+        run_id=run.id,
+        excel_row=3,
+        product_id=product.id,
+        match_source="public_provider",
+        original_values={"product_name": "公开基金"},
+    )
+    session.add_all([item, public_item])
+    session.flush()
+
+    first = review.capture_ocr_review_sample(
+        session,
+        run_id=run.id,
+        item=item,
+        actor_id=admin.id,
+        product=product,
+        values={"weekly": Decimal("0.01")},
+        note="人工确认",
+    )
+    assert first is not None
+    item.match_source = "manual"
+    item.metric_values = {"weekly": "0.01"}
+    item.metric_status = {"weekly": "manual"}
+    second = review.capture_ocr_review_sample(
+        session,
+        run_id=run.id,
+        item=item,
+        actor_id=admin.id,
+        product=product,
+        values={"weekly": Decimal("0.012")},
+        note="再次确认",
+    )
+
+    assert second is not None
+    assert review.capture_ocr_review_sample(
+        session,
+        run_id=run.id,
+        item=public_item,
+        actor_id=admin.id,
+        product=product,
+        values={"weekly": Decimal("0.01")},
+        note="公募不计入 OCR",
+    ) is None
+    session.flush()
+    samples = session.query(OcrReviewSample).order_by(OcrReviewSample.review_version).all()
+    assert [sample.review_version for sample in samples] == [1, 2]
+    assert samples[0].ocr_metric_values == {"weekly": "0.01"}
+    assert samples[1].ocr_metric_values == {"weekly": "0.01"}
+    assert samples[1].confirmed_metric_values == {"weekly": "0.012"}
 
 
 def test_save_manual_review_requires_note_and_at_least_one_metric() -> None:

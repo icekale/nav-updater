@@ -151,16 +151,24 @@ def capture_ocr_review_sample(
     values: Mapping[str, Decimal],
     note: str,
 ) -> OcrReviewSample | None:
-    if item.match_source not in OCR_QUALITY_SOURCES:
+    previous = session.scalar(
+        select(OcrReviewSample)
+        .where(OcrReviewSample.run_item_id == item.id)
+        .order_by(OcrReviewSample.review_version.desc())
+    )
+    if item.match_source in OCR_QUALITY_SOURCES:
+        source = item.match_source
+        ocr_product_id = item.product_id
+        ocr_values = dict(item.metric_values)
+        ocr_statuses = dict(item.metric_status)
+    elif previous is not None:
+        source = previous.ocr_match_source
+        ocr_product_id = previous.ocr_product_id
+        ocr_values = dict(previous.ocr_metric_values)
+        ocr_statuses = dict(previous.ocr_metric_status)
+    else:
         return None
-    version = (
-        session.scalar(
-            select(func.max(OcrReviewSample.review_version)).where(
-                OcrReviewSample.run_item_id == item.id
-            )
-        )
-        or 0
-    ) + 1
+    version = (previous.review_version if previous is not None else 0) + 1
     sample = OcrReviewSample(
         run_id=run_id,
         run_item_id=item.id,
@@ -168,10 +176,10 @@ def capture_ocr_review_sample(
         product_id=product.id,
         excel_product_name=str(item.original_values.get("product_name", "")),
         review_version=version,
-        ocr_match_source=item.match_source,
-        ocr_product_id=item.product_id,
-        ocr_metric_values=dict(item.metric_values),
-        ocr_metric_status=dict(item.metric_status),
+        ocr_match_source=source,
+        ocr_product_id=ocr_product_id,
+        ocr_metric_values=ocr_values,
+        ocr_metric_status=ocr_statuses,
         confirmed_metric_values={name: str(value) for name, value in values.items()},
         confirmed_metric_status={
             field.name: "manual" if field.name in values else "unconfirmed"
@@ -183,7 +191,7 @@ def capture_ocr_review_sample(
     return sample
 ```
 
-将 `save_manual_review` 改为接收可选的已解析 `values`，避免路由再次解析表单。路由在确认产品后依次执行：`values = parse_manual_metrics(inputs)`、`capture_ocr_review_sample(...)`、`save_manual_review(..., values=values)`、既有 `AuditLog`、最后仅一次 `session.commit()`。不要在快照函数中提交事务。
+将 `save_manual_review` 改为接收可选的已解析 `values`，避免路由再次解析表单。路由在确认产品后依次执行：`values = parse_manual_metrics(inputs)`、`capture_ocr_review_sample(...)`、`save_manual_review(..., values=values)`、既有 `AuditLog`、最后仅一次 `session.commit()`。不要在快照函数中提交事务。重复审核时新样本复用上一版本的原 OCR 快照，而不把当前 `manual` 值误作 OCR 识别结果。
 
 - [ ] **Step 4: 运行快照测试及已有人工审核测试**
 
