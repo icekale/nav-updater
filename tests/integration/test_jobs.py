@@ -13,7 +13,13 @@ from app.db import Base
 from app.domain.matching import CatalogRecord
 from app.domain.types import NavPoint
 from app.excel.template_adapter import TemplateAdapter
-from app.jobs.processor import ALL_METRICS, _find_image_row, _image_row_status, process_run
+from app.jobs.processor import (
+    ALL_METRICS,
+    _find_image_row,
+    _image_row_status,
+    _same_ocr_row,
+    process_run,
+)
 from app.jobs.service import (
     RUN_COMPLETED,
     RUN_PROCESSING,
@@ -799,6 +805,93 @@ def test_process_run_retries_isolated_blank_and_preserves_ocr_evidence() -> None
     assert adapter.updates[item.excel_row]["mtd"] == Decimal("-0.0633")
 
 
+def test_process_run_keeps_first_pass_reviewable_when_dense_pass_fails() -> None:
+    class CapturingAdapter:
+        updates: dict[int, dict[str, Decimal | None]]
+        stale: dict[int, set[str]]
+
+        def apply_updates(self, input_path, output_path, updates, stale) -> None:
+            self.updates = updates
+            self.stale = stale
+
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text,
+            ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)),
+            0.99,
+        )
+
+    class FailingDenseOCR:
+        def recognize_tiled(self, path: str) -> list[OCRToken]:
+            return [
+                token("产品名称", 10, 10),
+                token("近一周(%)", 100, 10),
+                token("MTD(%)", 200, 10),
+                token("产品A", 10, 50),
+                token("1.00%", 100, 50),
+                token("-", 200, 50),
+            ]
+
+        def recognize_tiled_dense(self, path: str) -> list[OCRToken]:
+            raise RuntimeError("dense OCR unavailable")
+
+    class FailingProvider:
+        def resolve_by_name(self, product_name: str):
+            raise AssertionError(f"provider should not be called for {product_name}")
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    run = UpdateRun(operator_id=admin.id, cutoff_date=date(2026, 7, 17), status="uploaded")
+    session.add(run)
+    session.flush()
+    session.add_all(
+        [
+            RunFile(
+                run_id=run.id,
+                file_type="workbook",
+                original_name="template.xlsx",
+                storage_path="/tmp/template.xlsx",
+                sha256="0" * 64,
+            ),
+            RunFile(
+                run_id=run.id,
+                file_type="image",
+                original_name="report.png",
+                storage_path="/tmp/report.png",
+                sha256="1" * 64,
+            ),
+            RunItem(
+                run_id=run.id,
+                excel_row=2,
+                original_values={"product_name": "产品A"},
+            ),
+        ]
+    )
+    session.commit()
+    adapter = CapturingAdapter()
+
+    processed = process_run(
+        session,
+        run.id,
+        ocr_service=FailingDenseOCR(),
+        provider=FailingProvider(),
+        adapter=adapter,
+    )
+
+    item = session.query(RunItem).filter_by(run_id=run.id).one()
+    assert processed.status == "completed_with_warnings"
+    assert item.metric_values["weekly"] == "0.01"
+    assert item.ocr_evidence["metrics"]["weekly"]["passes"][0]["pass"] == 1
+    assert item.ocr_evidence["second_pass_error"] == "dense OCR unavailable"
+    assert "二次 OCR 失败" in item.error_reason
+    assert item.metric_status["mtd"] == "stale"
+    assert "mtd" in adapter.stale[item.excel_row]
+
+
 def test_run_regression_isolates_production_items_and_records_each_result(tmp_path: Path) -> None:
     def token(text: str, left: float, top: float) -> OCRToken:
         return OCRToken(
@@ -886,6 +979,46 @@ def test_run_regression_isolates_production_items_and_records_each_result(tmp_pa
     assert production_item.metric_values == before
 
 
+def test_run_regression_keeps_expected_payload_when_sample_execution_fails(tmp_path: Path) -> None:
+    class FailingOCR:
+        def recognize_tiled(self, path: str) -> list[OCRToken]:
+            raise RuntimeError("ocr unavailable")
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    image = tmp_path / "samples" / "sample.png"
+    image.parent.mkdir()
+    image.write_bytes(b"sample")
+    run = OcrRegressionRun(requested_by=admin.id)
+    session.add(run)
+    session.flush()
+    session.add(
+        OcrRegressionSample(
+            image_path=str(image),
+            image_sha256=hashlib.sha256(b"sample").hexdigest(),
+            source_label="管理员复核案例",
+            excel_product_name="产品A",
+            candidate_names=["产品A"],
+            expected_product_code="P001",
+            expected_metric_values={"mtd": "-0.0633"},
+            expected_metric_status={"mtd": "extracted"},
+            note="失败样本",
+            is_active=True,
+        )
+    )
+    session.commit()
+
+    run_regression(session, run.id, samples_root=tmp_path / "samples", ocr_service=FailingOCR())
+
+    result = session.query(OcrRegressionResult).one()
+    assert result.outcome == "execution_failed"
+    assert result.expected["metric_values"] == {"mtd": "-0.0633"}
+
+
 def test_find_image_row_matches_unique_truncated_chinese_name() -> None:
     item_name = "浑瑾岳桐金选1号B"
     row = OCRMetricRow(
@@ -940,6 +1073,57 @@ def test_find_image_row_rejects_an_equal_chinese_prefix_with_two_excel_candidate
         [],
         ["聚鸣金选高山8号B", "聚鸣金选高山3号B"],
     ) is None
+
+
+def test_same_ocr_row_merges_a_truncated_name_with_the_full_name() -> None:
+    first = OCRMetricRow(
+        product_name="浑瑾岳桐金选1号B",
+        product_code=None,
+        metrics={},
+        confidence=0.9,
+    )
+    second = OCRMetricRow(
+        product_name="浑瑾岳桐B1I1",
+        product_code=None,
+        metrics={"mtd": Decimal("-0.0633")},
+        confidence=0.9,
+    )
+
+    assert _same_ocr_row(first, second, ["浑瑾岳桐金选1号B"]) is True
+
+
+def test_same_ocr_row_uses_unique_name_when_codes_differ() -> None:
+    first = OCRMetricRow(
+        product_name="产品A",
+        product_code="OCR-错误",
+        metrics={},
+        confidence=0.9,
+    )
+    second = OCRMetricRow(
+        product_name="产品A",
+        product_code="P001",
+        metrics={"mtd": Decimal("-0.0633")},
+        confidence=0.9,
+    )
+
+    assert _same_ocr_row(first, second, ["产品A"]) is True
+
+
+def test_same_ocr_row_rejects_an_ambiguous_shared_prefix() -> None:
+    first = OCRMetricRow(
+        product_name="仁桥金选泽源5B",
+        product_code=None,
+        metrics={},
+        confidence=0.9,
+    )
+    second = OCRMetricRow(
+        product_name="仁桥金选泽源6B",
+        product_code=None,
+        metrics={"mtd": Decimal("-0.0633")},
+        confidence=0.9,
+    )
+
+    assert _same_ocr_row(first, second, ["仁桥金选泽源5B", "仁桥金选泽源6B"]) is False
 
 
 def test_find_image_row_rejects_a_prefix_with_an_active_catalog_sibling() -> None:

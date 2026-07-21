@@ -20,6 +20,11 @@ def _cell_payload(cell: MetricCellEvidence) -> dict[str, object]:
 def merge_metric_passes(
     first: OCRMetricRow,
     second: OCRMetricRow | None,
+    *,
+    first_pass: int = 1,
+    second_pass: int = 2,
+    second_attempted: bool = False,
+    allow_single_pass_blank: bool = True,
 ) -> tuple[OCRMetricRow, dict[str, object]]:
     metrics = dict(first.metrics)
     blank_metrics = set(first.blank_metrics)
@@ -35,21 +40,24 @@ def merge_metric_passes(
         first_cell = first.metric_evidence.get(key)
         second_cell = second.metric_evidence.get(key) if second is not None else None
         if first_cell is not None:
-            passes.append({"pass": 1, **_cell_payload(first_cell)})
+            passes.append({"pass": first_pass, **_cell_payload(first_cell)})
         if second_cell is not None:
-            passes.append({"pass": 2, **_cell_payload(second_cell)})
-        selected = 1 if key in first.metrics else None
+            passes.append({"pass": second_pass, **_cell_payload(second_cell)})
+        selected = first_pass if key in first.metrics else None
         if second is not None and key in second.metrics and key not in first.metrics:
             metrics[key] = second.metrics[key]
             blank_metrics.discard(key)
             selected_evidence[key] = second_cell or selected_evidence.get(key)
-            selected = 2
+            selected = second_pass
         elif key in first.blank_metrics and second is not None and key in second.blank_metrics:
-            selected = 2
-        elif key in first.blank_metrics and key not in metrics:
-            blank_metrics.add(key)
+            selected = second_pass
+        elif second_attempted and key in first.blank_metrics:
+            blank_metrics.discard(key)
         selected_pass[key] = selected
         evidence_metrics[key] = {"passes": passes, "selected_pass": selected}
+
+    if not allow_single_pass_blank:
+        blank_metrics.clear()
 
     return (
         OCRMetricRow(
@@ -86,6 +94,8 @@ def crop_box(
     image: str | Path,
     box: tuple[tuple[float, float], ...],
     destination_root: Path,
+    *,
+    image_sha256: str | None = None,
 ) -> Path:
     if not box:
         raise ValueError("截图证据缺少边界框")
@@ -100,7 +110,10 @@ def crop_box(
         bottom = max(0, min(height, int(max(point[1] for point in box))))
         if right <= left or bottom <= top:
             raise ValueError("截图证据边界框无效")
-        key = json.dumps([source_path.stat().st_mtime_ns, box], ensure_ascii=True)
+        key = json.dumps(
+            [image_sha256, str(source_path), source_path.stat().st_mtime_ns, box],
+            ensure_ascii=True,
+        )
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
         target = destination_root / f"evidence-{digest}.png"
         if not target.exists():

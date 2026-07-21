@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -306,7 +306,14 @@ def create_app(
                 object_id=str(run.id),
             )
         )
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            return RedirectResponse(
+                "/quality?notice=已有回归任务运行中",
+                status_code=303,
+            )
         return RedirectResponse("/quality?notice=已加入 OCR 回归队列", status_code=303)
 
     @app.post("/quality/samples/import")
@@ -942,10 +949,16 @@ def create_app(
         if draft is not None:
             review_note = draft.get("review_note", "")
         missing_fields = tuple(
-            field for field in METRIC_FIELDS if field.name not in item.metric_values
+            field
+            for field in METRIC_FIELDS
+            if field.name not in item.metric_values
+            and item.metric_status.get(field.name) != "source_blank"
         )
         recognized_fields = tuple(
             field for field in METRIC_FIELDS if field.name in item.metric_values
+        )
+        source_blank_fields = tuple(
+            field for field in METRIC_FIELDS if item.metric_status.get(field.name) == "source_blank"
         )
         return {
             "item": item,
@@ -957,6 +970,7 @@ def create_app(
             "review_note": review_note,
             "missing_fields": missing_fields,
             "recognized_fields": recognized_fields,
+            "source_blank_fields": source_blank_fields,
             "missing_count": len(missing_fields),
             "recognized_count": len(recognized_fields),
             "evidence": item.ocr_evidence.get("metrics", {})
@@ -1025,6 +1039,7 @@ def create_app(
                 image_path,
                 coordinates,
                 ensure_data_dir(app.state.settings) / "ocr-quality" / "crops",
+                image_sha256=source.sha256,
             )
         except (OSError, TypeError, ValueError, IndexError):
             return HTMLResponse("证据不存在", status_code=404)

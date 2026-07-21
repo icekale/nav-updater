@@ -848,6 +848,7 @@ def test_review_evidence_is_login_protected_and_served_as_a_crop(tmp_path: Path)
             item = session.get(RunItem, item_id)
             assert item is not None
             item.row_status = "stale"
+            item.metric_status = {"mtd": "source_blank"}
             item.ocr_evidence = {
                 "source_file_id": image.id,
                 "metrics": {
@@ -879,6 +880,8 @@ def test_review_evidence_is_login_protected_and_served_as_a_crop(tmp_path: Path)
     assert review.status_code == 200
     assert "识别证据" in review.text
     assert "-6.33" in review.text
+    assert "原图确认空值" in review.text
+    assert "需补录 11 项" in review.text
     assert evidence.status_code == 200
     assert evidence.headers["content-type"].startswith("image/png")
     assert invalid.status_code == 404

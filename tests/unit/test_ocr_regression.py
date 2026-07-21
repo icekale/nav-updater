@@ -2,7 +2,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
@@ -19,6 +21,8 @@ from app.models import (
     User,
 )
 from app.ocr.regression import (
+    _find_sample_row,
+    _recognize_sample,
     claim_next_regression,
     compare_sample,
     copy_sample_image,
@@ -26,6 +30,7 @@ from app.ocr.regression import (
     promote_confirmed_case,
     promote_review_sample,
 )
+from app.ocr.table_parser import OCRMetricRow
 
 
 def test_regression_models_keep_sample_when_source_run_is_deleted() -> None:
@@ -35,6 +40,21 @@ def test_regression_models_keep_sample_when_source_run_is_deleted() -> None:
     assert "ocr_evidence" in RunItem.__table__.c
     assert OcrRegressionSample.source_run_id.property.columns[0].nullable is True
     assert OcrRegressionSample.created_at.default is not None
+
+
+def test_only_one_active_regression_run_can_exist() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    session.add(OcrRegressionRun(requested_by=admin.id, status="queued"))
+    session.commit()
+
+    session.add(OcrRegressionRun(requested_by=admin.id, status="running"))
+    with pytest.raises(IntegrityError):
+        session.commit()
 
 
 def test_copy_sample_image_deduplicates_by_sha256(tmp_path: Path) -> None:
@@ -125,6 +145,7 @@ def test_promote_review_sample_copies_image_and_keeps_expected_values(tmp_path: 
     assert promoted.source_run_id == run.id
     assert promoted.source_item_id == item.id
     assert promoted.expected_product_code == product.product_code
+    assert promoted.expected_metric_status == {"mtd": "extracted"}
     assert Path(promoted.image_path).read_bytes() == Path(image_files[0].storage_path).read_bytes()
     audit = session.query(AuditLog).filter_by(object_type="ocr_regression_sample").one()
     assert audit.object_id == str(promoted.id)
@@ -198,6 +219,50 @@ def test_compare_sample_reports_value_and_status_mismatches() -> None:
     assert "mtd" in mismatch.detail
 
 
+def test_regression_uses_ocr_product_code_when_comparing_sample(monkeypatch) -> None:
+    sample = OcrRegressionSample(
+        candidate_names=["产品A"],
+        expected_product_code="P001",
+        expected_metric_values={"mtd": "0.01"},
+        expected_metric_status={"mtd": "extracted"},
+    )
+
+    class FakeOCR:
+        def recognize_tiled(self, path: str) -> list:
+            return []
+
+    monkeypatch.setattr(
+        "app.ocr.regression.extract_metric_rows",
+        lambda tokens: [
+            OCRMetricRow(
+                product_name="产品A",
+                product_code="P002",
+                metrics={"mtd": Decimal("0.01")},
+                confidence=0.99,
+            )
+        ],
+    )
+
+    actual_code, values, statuses = _recognize_sample(sample, ocr_service=FakeOCR())
+
+    assert actual_code == "P002"
+    assert values == {"mtd": "0.01"}
+    assert statuses == {"mtd": "extracted"}
+
+
+def test_regression_rejects_duplicate_sample_rows() -> None:
+    sample = OcrRegressionSample(
+        candidate_names=["产品A"],
+        expected_product_code="P001",
+    )
+    rows = [
+        OCRMetricRow("产品A", None, {}, 0.9),
+        OCRMetricRow("产品A", None, {}, 0.9),
+    ]
+
+    assert _find_sample_row(sample, rows) is None
+
+
 def test_claim_next_regression_moves_queued_run_to_running() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -239,3 +304,39 @@ def test_regression_worker_runs_claimed_task(monkeypatch, tmp_path: Path) -> Non
 
     assert regression_worker.run_once() is True
     assert (7, tmp_path / "ocr-quality" / "samples") in calls
+
+
+def test_regression_worker_marks_claimed_task_failed_when_execution_raises(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from app.jobs import regression_worker
+
+    class FakeRun:
+        id = 7
+        status = "running"
+        error_message = None
+        finished_at = None
+
+    class FakeSession:
+        def commit(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    run = FakeRun()
+    monkeypatch.setattr(regression_worker, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(regression_worker, "claim_next_regression", lambda session: run)
+    monkeypatch.setattr(
+        regression_worker,
+        "run_regression",
+        lambda session, run_id, samples_root: (
+            _ for _ in ()
+        ).throw(RuntimeError("ocr unavailable")),
+    )
+    monkeypatch.setattr(regression_worker, "ensure_data_dir", lambda: tmp_path)
+
+    assert regression_worker.run_once() is True
+    assert run.status == "failed"
+    assert run.error_message == "ocr unavailable"
+    assert run.finished_at is not None

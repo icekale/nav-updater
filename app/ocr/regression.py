@@ -7,10 +7,10 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..domain.matching import normalize_ocr_name
+from ..domain.matching import is_unique_ocr_name_match
 from ..models import (
     AuditLog,
     OcrRegressionResult,
@@ -144,8 +144,23 @@ def compare_sample(
 
 
 def _find_sample_row(sample: OcrRegressionSample, rows: list[OCRMetricRow]) -> OCRMetricRow | None:
-    candidates = {normalize_ocr_name(name) for name in sample.candidate_names}
-    return next((row for row in rows if normalize_ocr_name(row.product_name) in candidates), None)
+    if sample.expected_product_code:
+        code_matches = [
+            row for row in rows if row.product_code == sample.expected_product_code
+        ]
+        if len(code_matches) == 1:
+            return code_matches[0]
+        if len(code_matches) > 1:
+            return None
+    name_matches = [
+        row
+        for row in rows
+        if any(
+            is_unique_ocr_name_match(name, row.product_name, sample.candidate_names)
+            for name in sample.candidate_names
+        )
+    ]
+    return name_matches[0] if len(name_matches) == 1 else None
 
 
 def _recognize_sample(
@@ -157,17 +172,25 @@ def _recognize_sample(
     first_row = _find_sample_row(sample, first)
     expected_metrics = set(sample.expected_metric_values) | set(sample.expected_metric_status)
     second_row: OCRMetricRow | None = None
+    second_attempted = False
     dense_recognizer = getattr(ocr_service, "recognize_tiled_dense", None)
     if dense_recognizer is not None and (
         first_row is None
         or bool(first_row.blank_metrics)
         or bool(expected_metrics - set(first_row.metrics) - set(first_row.blank_metrics))
     ):
+        second_attempted = True
         second = extract_metric_rows(dense_recognizer(sample.image_path))
         second_row = _find_sample_row(sample, second)
     if first_row is None and second_row is None:
         return None, {}, {metric: "stale" for metric in expected_metrics}
-    merged, _ = merge_metric_passes(first_row or second_row, second_row if first_row else None)
+    merged, _ = merge_metric_passes(
+        first_row or second_row,
+        second_row if first_row else None,
+        first_pass=1 if first_row else 2,
+        second_attempted=second_attempted,
+        allow_single_pass_blank=first_row is not None,
+    )
     values = {key: str(value) for key, value in merged.metrics.items()}
     statuses = {
         key: (
@@ -179,7 +202,7 @@ def _recognize_sample(
         )
         for key in expected_metrics
     }
-    return sample.expected_product_code, values, statuses
+    return merged.product_code or sample.expected_product_code, values, statuses
 
 
 def run_regression(
@@ -238,7 +261,11 @@ def run_regression(
                     comparison = SampleComparison(
                         "execution_failed",
                         f"回归执行失败：{exc}",
-                        {},
+                        {
+                            "product_code": sample.expected_product_code,
+                            "metric_values": dict(sample.expected_metric_values or {}),
+                            "metric_status": dict(sample.expected_metric_status or {}),
+                        },
                         {},
                     )
             session.add(
@@ -430,11 +457,11 @@ def promote_review_sample(
     product = session.get(Product, review_sample.product_id)
     if item is None or product is None:
         raise ValueError("人工审核样本缺少来源产品或条目")
+    if item.run_id != review_sample.run_id:
+        raise ValueError("人工审核样本与来源条目批次不一致")
     image = _image_file(session, run_id=review_sample.run_id, source_file_id=source_file_id)
     values = {str(key): str(value) for key, value in review_sample.confirmed_metric_values.items()}
-    statuses = {
-        str(key): str(value) for key, value in review_sample.confirmed_metric_status.items()
-    }
+    statuses = {str(key): "extracted" for key in values}
     promoted, _ = _create_or_get_sample(
         session,
         item=item,
@@ -504,10 +531,8 @@ def import_confirmed_samples(
             )
             continue
         try:
-            before = session.scalar(
-                select(OcrRegressionSample.id).where(
-                    OcrRegressionSample.source_item_id == review_sample.run_item_id
-                )
+            before_count = (
+                session.scalar(select(func.count()).select_from(OcrRegressionSample)) or 0
             )
             promote_review_sample(
                 session,
@@ -515,7 +540,8 @@ def import_confirmed_samples(
                 samples_root=samples_root,
                 actor_id=actor_id,
             )
-            if before is None:
+            after_count = session.scalar(select(func.count()).select_from(OcrRegressionSample)) or 0
+            if after_count > before_count:
                 result = SampleImportResult(
                     result.created + 1, result.existing, result.skipped, result.needs_image_choice
                 )

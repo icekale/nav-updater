@@ -80,6 +80,9 @@ class _RegressionOperations:
     def create_index(self, name: str, table_name: str, columns, **kwargs) -> None:
         self.calls.append(("create_index", name, table_name, columns))
 
+    def drop_index(self, name: str, **kwargs) -> None:
+        self.calls.append(("drop_index", name))
+
     def drop_table(self, table_name: str) -> None:
         self.calls.append(("drop_table", table_name))
 
@@ -132,3 +135,23 @@ def test_ocr_regression_migration_creates_and_drops_regression_tables(monkeypatc
         ("drop_table", "ocr_regression_samples"),
     ]
     assert operations.calls[-1] == ("drop_column", "run_items", "ocr_evidence")
+
+
+def test_active_regression_migration_adds_and_removes_single_run_index(monkeypatch) -> None:
+    migration = importlib.import_module("migrations.versions.0007_single_active_ocr_regression_run")
+    operations = _RegressionOperations()
+    monkeypatch.setattr(migration, "op", operations)
+
+    migration.upgrade()
+    create_index = next(
+        call for call in operations.calls if call[:3] == (
+            "create_index",
+            "uq_ocr_regression_active_status",
+            "ocr_regression_runs",
+        )
+    )
+    assert [str(column) for column in create_index[3]] == ["(1)"]
+
+    operations.calls.clear()
+    migration.downgrade()
+    assert operations.calls == [("drop_index", "uq_ocr_regression_active_status")]

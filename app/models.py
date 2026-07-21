@@ -4,7 +4,18 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -171,6 +182,15 @@ class OcrRegressionSample(Base):
 
 class OcrRegressionRun(Base):
     __tablename__ = "ocr_regression_runs"
+    __table_args__ = (
+        Index(
+            "uq_ocr_regression_active_status",
+            text("(1)"),
+            unique=True,
+            sqlite_where=text("status IN ('queued', 'running')"),
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)

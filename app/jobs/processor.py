@@ -214,27 +214,55 @@ def needs_dense_second_pass(
     return bool(expected_metrics - set(row.metrics) - set(row.blank_metrics))
 
 
-def _same_ocr_row(first: OCRMetricRow, second: OCRMetricRow) -> bool:
-    if first.product_code and second.product_code:
-        return first.product_code == second.product_code
-    return normalize_ocr_name(first.product_name) == normalize_ocr_name(second.product_name)
+def _same_ocr_row(
+    first: OCRMetricRow,
+    second: OCRMetricRow,
+    candidate_names: Iterable[str] = (),
+) -> bool:
+    if first.product_code and second.product_code and first.product_code == second.product_code:
+        return True
+    if normalize_ocr_name(first.product_name) == normalize_ocr_name(second.product_name):
+        return True
+    candidates = tuple(candidate_names)
+    if not candidates:
+        return False
+    first_matches = {
+        name
+        for name in candidates
+        if is_unique_ocr_name_match(name, first.product_name, candidates)
+    }
+    second_matches = {
+        name
+        for name in candidates
+        if is_unique_ocr_name_match(name, second.product_name, candidates)
+    }
+    return bool(first_matches & second_matches)
 
 
 def _merge_image_rows(
     first_rows: list[OCRMetricRow],
     second_rows: list[OCRMetricRow] | None,
     image: RunFile,
+    candidate_names: Iterable[str] = (),
 ) -> tuple[list[OCRMetricRow], dict[int, dict[str, object]]]:
     merged_rows: list[OCRMetricRow] = []
     row_evidence: dict[int, dict[str, object]] = {}
     remaining = list(second_rows or [])
     for first in first_rows:
         second_index = next(
-            (index for index, candidate in enumerate(remaining) if _same_ocr_row(first, candidate)),
+            (
+                index
+                for index, candidate in enumerate(remaining)
+                if _same_ocr_row(first, candidate, candidate_names)
+            ),
             None,
         )
         second = remaining.pop(second_index) if second_index is not None else None
-        merged, evidence = merge_metric_passes(first, second)
+        merged, evidence = merge_metric_passes(
+            first,
+            second,
+            second_attempted=second_rows is not None,
+        )
         evidence.update(
             {
                 "source_file_id": image.id,
@@ -245,7 +273,12 @@ def _merge_image_rows(
         merged_rows.append(merged)
         row_evidence[id(merged)] = evidence
     for second in remaining:
-        merged, evidence = merge_metric_passes(second, None)
+        merged, evidence = merge_metric_passes(
+            second,
+            None,
+            first_pass=2,
+            allow_single_pass_blank=False,
+        )
         evidence.update(
             {
                 "source_file_id": image.id,
@@ -312,6 +345,7 @@ def process_run(
         for image in (item for item in files if item.file_type == "image"):
             first_rows = extract_metric_rows(ocr_service.recognize_tiled(image.storage_path))
             dense_rows: list[OCRMetricRow] | None = None
+            dense_error: str | None = None
             dense_recognizer = getattr(ocr_service, "recognize_tiled_dense", None)
             if callable(dense_recognizer) and any(
                 needs_dense_second_pass(
@@ -320,8 +354,24 @@ def process_run(
                 )
                 for name in item_names
             ):
-                dense_rows = extract_metric_rows(dense_recognizer(image.storage_path))
-            merged_rows, image_evidence = _merge_image_rows(first_rows, dense_rows, image)
+                try:
+                    dense_rows = extract_metric_rows(dense_recognizer(image.storage_path))
+                except Exception as exc:
+                    # A failed retry must not discard a usable first pass.  Passing an
+                    # empty second result marks first-pass source blanks as unconfirmed,
+                    # so they remain reviewable instead of being written as values.
+                    dense_rows = []
+                    dense_error = str(exc) or "调用失败"
+                    warnings = True
+            merged_rows, image_evidence = _merge_image_rows(
+                first_rows,
+                dense_rows,
+                image,
+                item_names,
+            )
+            if dense_error:
+                for evidence in image_evidence.values():
+                    evidence["second_pass_error"] = dense_error
             screenshot_rows.extend(merged_rows)
             screenshot_evidence.update(image_evidence)
         for item in items:
@@ -359,6 +409,12 @@ def process_run(
                     error=error_reason,
                 )
                 item.ocr_evidence = screenshot_evidence.get(id(image_row), {})
+                second_pass_error = item.ocr_evidence.get("second_pass_error")
+                if second_pass_error:
+                    error_reason = (
+                        f"{error_reason}；" if error_reason else ""
+                    ) + f"二次 OCR 失败：{second_pass_error}"
+                    item.error_reason = error_reason
                 updates[item.excel_row] = {
                     **image_row.metrics,
                     **dict.fromkeys(confirmed_blank_metrics),
