@@ -15,7 +15,16 @@ from app.config import Settings
 from app.db import Base
 from app.jobs.service import batch_manage_runs
 from app.main import create_app
-from app.models import AuditLog, Meeting, Product, RunFile, RunItem, UpdateRun, User
+from app.models import (
+    AuditLog,
+    Meeting,
+    OcrReviewSample,
+    Product,
+    RunFile,
+    RunItem,
+    UpdateRun,
+    User,
+)
 
 
 def meeting_workbook_bytes() -> bytes:
@@ -194,6 +203,35 @@ def _create_run_with_artifacts(
         return run.id, item.id, run_dir, result
     finally:
         session.close()
+
+
+def test_run_deletion_cascades_ocr_review_samples(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app):
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        session = factory()
+        try:
+            sample = OcrReviewSample(
+                run_id=run_id,
+                run_item_id=item_id,
+                excel_product_name="产品A",
+                review_version=1,
+                ocr_match_source="image",
+                ocr_metric_values={"weekly": "0.01"},
+                ocr_metric_status={"weekly": "extracted"},
+                confirmed_metric_values={"weekly": "0.01"},
+                confirmed_metric_status={"weekly": "manual"},
+                review_note="人工确认",
+            )
+            session.add(sample)
+            session.commit()
+            run = session.get(UpdateRun, run_id)
+            assert run is not None
+            session.delete(run)
+            session.commit()
+            assert session.query(OcrReviewSample).count() == 0
+        finally:
+            session.close()
 
 
 def test_batch_requeue_moves_each_completed_run_back_to_the_queue(tmp_path: Path) -> None:

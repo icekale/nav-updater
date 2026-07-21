@@ -73,6 +73,9 @@ class UpdateRun(Base):
     operator: Mapped[User] = relationship()
     files: Mapped[list[RunFile]] = relationship(back_populates="run", cascade="all, delete-orphan")
     items: Mapped[list[RunItem]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    quality_samples: Mapped[list[OcrReviewSample]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
 
 class RunFile(Base):
@@ -104,6 +107,35 @@ class RunItem(Base):
 
     run: Mapped[UpdateRun] = relationship(back_populates="items")
     product: Mapped[Product | None] = relationship()
+    quality_samples: Mapped[list[OcrReviewSample]] = relationship(
+        back_populates="run_item", cascade="all, delete-orphan"
+    )
+
+
+class OcrReviewSample(Base):
+    __tablename__ = "ocr_review_samples"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("update_runs.id"), index=True)
+    run_item_id: Mapped[int] = mapped_column(ForeignKey("run_items.id"), index=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), index=True)
+    excel_product_name: Mapped[str] = mapped_column(String(255))
+    review_version: Mapped[int] = mapped_column()
+    ocr_match_source: Mapped[str] = mapped_column(String(30))
+    ocr_product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), index=True)
+    ocr_metric_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    ocr_metric_status: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    confirmed_metric_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    confirmed_metric_status: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    review_note: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+    run: Mapped[UpdateRun] = relationship(back_populates="quality_samples")
+    run_item: Mapped[RunItem] = relationship(back_populates="quality_samples")
+    product: Mapped[Product | None] = relationship(foreign_keys=[product_id])
 
 
 class AuditLog(Base):
