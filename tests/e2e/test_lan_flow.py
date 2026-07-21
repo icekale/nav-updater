@@ -87,6 +87,268 @@ def test_user_history_foreign_keys_use_set_null() -> None:
     assert UpdateRun.__table__.c.operator_id.nullable is True
 
 
+def _test_app(tmp_path: Path):
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        data_dir=tmp_path,
+        session_secret="test-secret",
+        initial_admin_username="admin",
+        initial_admin_password="change-me",
+    )
+    return create_app(settings=settings, session_factory=factory), factory
+
+
+def _token(client: TestClient, path: str) -> str:
+    response = client.get(path)
+    match = re.search(r'name="token" value="([^"]+)"', response.text)
+    assert match is not None
+    return match.group(1)
+
+
+def _login_as_admin(client: TestClient) -> None:
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "change-me", "token": _token(client, "/login")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def _create_run_with_artifacts(
+    factory: sessionmaker,
+    data_dir: Path,
+    *,
+    status: str = "completed",
+) -> tuple[int, int, Path, Path]:
+    session = factory()
+    try:
+        admin = session.query(User).filter_by(username="admin").one()
+        run_dir = data_dir / "runs" / "run-artifacts"
+        run_dir.mkdir(parents=True)
+        workbook = run_dir / "input.xlsx"
+        image = run_dir / "source.png"
+        result = run_dir / "result.xlsx"
+        workbook.write_bytes(b"input")
+        image.write_bytes(b"image")
+        result.write_bytes(b"result")
+        run = UpdateRun(
+            operator_id=admin.id,
+            cutoff_date=date(2026, 7, 17),
+            status=status,
+            output_path=str(result),
+        )
+        session.add(run)
+        session.flush()
+        item = RunItem(
+            run_id=run.id,
+            excel_row=2,
+            original_values={"product_name": "产品A"},
+        )
+        session.add_all(
+            [
+                RunFile(
+                    run_id=run.id,
+                    file_type="workbook",
+                    original_name="input.xlsx",
+                    storage_path=str(workbook),
+                    sha256="0" * 64,
+                ),
+                RunFile(
+                    run_id=run.id,
+                    file_type="image",
+                    original_name="source.png",
+                    storage_path=str(image),
+                    sha256="1" * 64,
+                ),
+                item,
+            ]
+        )
+        session.flush()
+        session.add_all(
+            [
+                AuditLog(
+                    actor_id=admin.id,
+                    action="create",
+                    object_type="update_run",
+                    object_id=str(run.id),
+                ),
+                AuditLog(
+                    actor_id=admin.id,
+                    action="manual_review",
+                    object_type="run_item",
+                    object_id=str(item.id),
+                ),
+            ]
+        )
+        session.commit()
+        return run.id, item.id, run_dir, result
+    finally:
+        session.close()
+
+
+def test_deleting_completed_run_removes_artifacts_and_old_audit_logs(
+    tmp_path: Path,
+) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, run_dir, result = _create_run_with_artifacts(factory, tmp_path)
+
+        deleted = client.post(
+            f"/updates/{run_id}/delete",
+            data={"token": _token(client, "/updates")},
+            follow_redirects=False,
+        )
+
+    assert deleted.status_code == 303
+    assert deleted.headers["location"].startswith("/updates?notice=")
+    session = factory()
+    try:
+        assert session.get(UpdateRun, run_id) is None
+        assert session.query(RunFile).filter_by(run_id=run_id).count() == 0
+        assert session.query(RunItem).filter_by(run_id=run_id).count() == 0
+        deleted_log = session.query(AuditLog).filter_by(
+            action="delete", object_type="update_run", object_id=str(run_id)
+        ).one()
+        assert deleted_log.context == {"deleted_item_count": 1, "deleted_file_count": 3}
+        assert session.query(AuditLog).filter_by(
+            object_type="run_item", object_id=str(item_id)
+        ).count() == 0
+    finally:
+        session.close()
+    assert not run_dir.exists()
+    assert not result.exists()
+
+
+def test_deleting_processing_run_is_rejected_without_removing_files(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, _, run_dir, result = _create_run_with_artifacts(
+            factory, tmp_path, status="processing"
+        )
+
+        rejected = client.post(
+            f"/updates/{run_id}/delete", data={"token": _token(client, "/updates")}
+        )
+
+    assert rejected.status_code == 409
+    session = factory()
+    try:
+        assert session.get(UpdateRun, run_id) is not None
+    finally:
+        session.close()
+    assert run_dir.exists()
+    assert result.exists()
+
+
+def test_deleting_run_keeps_a_file_outside_the_data_directory(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    outside_path = tmp_path.parent / "keep-me.xlsx"
+    outside_path.write_bytes(b"keep")
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        session = factory()
+        try:
+            session.add(
+                RunFile(
+                    run_id=run_id,
+                    file_type="workbook",
+                    original_name="keep-me.xlsx",
+                    storage_path=str(outside_path),
+                    sha256="2" * 64,
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        deleted = client.post(
+            f"/updates/{run_id}/delete",
+            data={"token": _token(client, "/updates")},
+            follow_redirects=False,
+        )
+
+    assert deleted.status_code == 303
+    assert outside_path.read_bytes() == b"keep"
+
+
+def test_admin_deletes_other_user_and_retains_run_history(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        session = factory()
+        try:
+            operator = User(username="operator", password_hash="hash", role="user")
+            session.add(operator)
+            session.flush()
+            run = UpdateRun(operator_id=operator.id, cutoff_date=date(2026, 7, 17))
+            session.add(run)
+            session.flush()
+            session.add(
+                AuditLog(
+                    actor_id=operator.id,
+                    action="create",
+                    object_type="update_run",
+                    object_id=str(run.id),
+                )
+            )
+            session.commit()
+            operator_id, run_id = operator.id, run.id
+        finally:
+            session.close()
+
+        deleted = client.post(
+            f"/admin/users/{operator_id}/delete",
+            data={"token": _token(client, "/admin/users")},
+            follow_redirects=False,
+        )
+
+    assert deleted.status_code == 303
+    session = factory()
+    try:
+        assert session.get(User, operator_id) is None
+        assert session.get(UpdateRun, run_id).operator_id is None
+        assert session.query(AuditLog).filter_by(
+            action="create", object_type="update_run", object_id=str(run_id)
+        ).one().actor_id is None
+        assert session.query(AuditLog).filter_by(
+            action="delete", object_type="user", object_id=str(operator_id)
+        ).count() == 1
+    finally:
+        session.close()
+
+
+def test_admin_cannot_delete_self_or_the_last_admin(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        session = factory()
+        try:
+            admin_id = session.query(User).filter_by(username="admin").one().id
+        finally:
+            session.close()
+
+        rejected = client.post(
+            f"/admin/users/{admin_id}/delete", data={"token": _token(client, "/admin/users")}
+        )
+
+    assert rejected.status_code == 409
+    session = factory()
+    try:
+        assert session.get(User, admin_id) is not None
+    finally:
+        session.close()
+
+
 def test_login_catalog_upload_and_queue_run(tmp_path: Path) -> None:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",

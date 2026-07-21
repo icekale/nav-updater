@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -41,7 +41,14 @@ from .jobs.review import (
     parse_manual_metrics,
     save_manual_review,
 )
-from .jobs.service import create_run, lock_run_item, requeue_run, resolve_item
+from .jobs.service import (
+    RunDeletionConflict,
+    create_run,
+    delete_run,
+    lock_run_item,
+    requeue_run,
+    resolve_item,
+)
 from .meetings import MeetingImportError, import_meetings
 from .models import AuditLog, Meeting, Product, UpdateRun, User
 
@@ -176,6 +183,32 @@ def create_app(
             name="updates.html",
             context={"user": user, "runs": runs, "csrf_token": csrf_token(request)},
         )
+
+    @app.post("/updates/{run_id}/delete")
+    def delete_update(
+        run_id: int,
+        request: Request,
+        token: str = Form(...),
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        try:
+            deleted = delete_run(
+                session,
+                run_id,
+                data_dir=ensure_data_dir(app.state.settings),
+                actor_id=user.id,
+            )
+        except RunDeletionConflict:
+            return HTMLResponse("批次正在处理中，不能删除", status_code=status.HTTP_409_CONFLICT)
+        if deleted is None:
+            return HTMLResponse("批次不存在", status_code=status.HTTP_404_NOT_FOUND)
+        item_count, file_count = deleted
+        notice = urlencode(
+            {"notice": f"已删除批次，清理 {item_count} 条记录和 {file_count} 个文件"}
+        )
+        return RedirectResponse(f"/updates?{notice}", status_code=status.HTTP_303_SEE_OTHER)
 
     def meeting_list_response(
         request: Request,
@@ -864,6 +897,47 @@ def create_app(
         )
         session.commit()
         return RedirectResponse("/admin/users", status_code=303)
+
+    @app.post("/admin/users/{user_id}/delete")
+    def delete_user(
+        user_id: int,
+        request: Request,
+        token: str = Form(...),
+        user: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        target = session.get(User, user_id)
+        if target is None:
+            return HTMLResponse("账号不存在", status_code=status.HTTP_404_NOT_FOUND)
+        if target.id == user.id:
+            return HTMLResponse("不能删除当前登录账号", status_code=status.HTTP_409_CONFLICT)
+        if target.role == "admin":
+            admin_count = session.scalar(
+                select(func.count()).select_from(User).where(User.role == "admin")
+            )
+            if admin_count <= 1:
+                return HTMLResponse("不能删除最后一个管理员", status_code=status.HTTP_409_CONFLICT)
+        target_name = target.username
+        session.execute(
+            update(UpdateRun).where(UpdateRun.operator_id == target.id).values(operator_id=None)
+        )
+        session.execute(
+            update(AuditLog).where(AuditLog.actor_id == target.id).values(actor_id=None)
+        )
+        session.delete(target)
+        session.add(
+            AuditLog(
+                actor_id=user.id,
+                action="delete",
+                object_type="user",
+                object_id=str(user_id),
+                context={"username": target_name},
+            )
+        )
+        session.commit()
+        notice = urlencode({"notice": f"已删除账号：{target_name}"})
+        return RedirectResponse(f"/admin/users?{notice}", status_code=status.HTTP_303_SEE_OTHER)
 
     return app
 

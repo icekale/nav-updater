@@ -7,19 +7,24 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from ..domain.metrics import calculate_max_drawdown, calculate_returns, calculate_sharpe
 from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
-from ..models import RunFile, RunItem, UpdateRun
+from ..models import AuditLog, RunFile, RunItem, UpdateRun
 
 RUN_READY = "uploaded"
 RUN_PROCESSING = "processing"
 RUN_COMPLETED = "completed"
 RUN_COMPLETED_WARNINGS = "completed_with_warnings"
 RUN_FAILED = "failed"
+
+
+class RunDeletionConflict(ValueError):
+    pass
 
 
 def utcnow() -> datetime:
@@ -137,6 +142,56 @@ def requeue_run(session: Session, run_id: int) -> UpdateRun | None:
         return None
     session.commit()
     return session.get(UpdateRun, run_id)
+
+
+def delete_run(
+    session: Session,
+    run_id: int,
+    *,
+    data_dir: Path,
+    actor_id: int,
+) -> tuple[int, int] | None:
+    run = session.scalar(select(UpdateRun).where(UpdateRun.id == run_id).with_for_update())
+    if run is None:
+        return None
+    if run.status == RUN_PROCESSING:
+        raise RunDeletionConflict("批次正在处理中")
+
+    runs_root = (data_dir / "runs").resolve()
+    artifact_paths = {Path(file.storage_path).resolve() for file in run.files}
+    if run.output_path:
+        artifact_paths.add(Path(run.output_path).resolve())
+    managed_paths = {path for path in artifact_paths if path.is_relative_to(runs_root)}
+    run_item_ids = [str(item.id) for item in run.items]
+    audit_filter = (AuditLog.object_type == "update_run") & (AuditLog.object_id == str(run.id))
+    if run_item_ids:
+        audit_filter |= (AuditLog.object_type == "run_item") & AuditLog.object_id.in_(run_item_ids)
+    session.execute(sql_delete(AuditLog).where(audit_filter))
+    session.add(
+        AuditLog(
+            actor_id=actor_id,
+            action="delete",
+            object_type="update_run",
+            object_id=str(run.id),
+            context={
+                "deleted_item_count": len(run.items),
+                "deleted_file_count": sum(path.exists() for path in managed_paths),
+            },
+        )
+    )
+    item_count = len(run.items)
+    file_count = sum(path.exists() for path in managed_paths)
+    managed_directories = {path.parent for path in managed_paths if path.parent.parent == runs_root}
+    session.delete(run)
+    session.commit()
+    for path in managed_paths:
+        path.unlink(missing_ok=True)
+    for directory in managed_directories:
+        try:
+            directory.rmdir()
+        except OSError:
+            continue
+    return item_count, file_count
 
 
 def lock_run_item(session: Session, run_id: int, item_id: int) -> tuple[UpdateRun, RunItem] | None:
