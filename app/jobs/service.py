@@ -132,7 +132,12 @@ def claim_next_run(session: Session, now: datetime | None = None) -> UpdateRun |
     return run
 
 
-def requeue_run(session: Session, run_id: int) -> UpdateRun | None:
+def requeue_run(
+    session: Session,
+    run_id: int,
+    *,
+    audit_actor_id: int | None = None,
+) -> UpdateRun | None:
     result = session.execute(
         update(UpdateRun)
         .where(UpdateRun.id == run_id, UpdateRun.status != RUN_PROCESSING)
@@ -148,6 +153,15 @@ def requeue_run(session: Session, run_id: int) -> UpdateRun | None:
     if result.rowcount != 1:
         session.rollback()
         return None
+    if audit_actor_id is not None:
+        session.add(
+            AuditLog(
+                actor_id=audit_actor_id,
+                action="queue",
+                object_type="update_run",
+                object_id=str(run_id),
+            )
+        )
     session.commit()
     return session.get(UpdateRun, run_id)
 
@@ -162,26 +176,30 @@ def batch_manage_runs(
 ) -> BatchRunResult:
     result = BatchRunResult()
     for run_id in dict.fromkeys(run_ids):
-        run = session.get(UpdateRun, run_id)
-        if run is None:
-            result = replace(result, missing=result.missing + 1)
-        elif run.status == RUN_PROCESSING:
-            result = replace(result, skipped_processing=result.skipped_processing + 1)
-        elif action == "requeue":
-            requeue_run(session, run_id)
-            session.add(
-                AuditLog(
-                    actor_id=actor_id,
-                    action="queue",
-                    object_type="update_run",
-                    object_id=str(run_id),
-                )
+        if action == "requeue":
+            queued = requeue_run(session, run_id, audit_actor_id=actor_id)
+            if queued is not None:
+                result = replace(result, requeued=result.requeued + 1)
+                continue
+            run = session.scalar(
+                select(UpdateRun)
+                .where(UpdateRun.id == run_id)
+                .execution_options(populate_existing=True)
             )
-            session.commit()
-            result = replace(result, requeued=result.requeued + 1)
+            if run is None:
+                result = replace(result, missing=result.missing + 1)
+            elif run.status == RUN_PROCESSING:
+                result = replace(result, skipped_processing=result.skipped_processing + 1)
         elif action == "delete":
-            delete_run(session, run_id, data_dir=data_dir, actor_id=actor_id)
-            result = replace(result, deleted=result.deleted + 1)
+            try:
+                deleted = delete_run(session, run_id, data_dir=data_dir, actor_id=actor_id)
+            except RunDeletionConflict:
+                result = replace(result, skipped_processing=result.skipped_processing + 1)
+                continue
+            if deleted is None:
+                result = replace(result, missing=result.missing + 1)
+            else:
+                result = replace(result, deleted=result.deleted + 1)
         else:
             raise ValueError("unsupported batch action")
     return result
@@ -194,7 +212,12 @@ def delete_run(
     data_dir: Path,
     actor_id: int,
 ) -> tuple[int, int] | None:
-    run = session.scalar(select(UpdateRun).where(UpdateRun.id == run_id).with_for_update())
+    run = session.scalar(
+        select(UpdateRun)
+        .where(UpdateRun.id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if run is None:
         return None
     if run.status == RUN_PROCESSING:

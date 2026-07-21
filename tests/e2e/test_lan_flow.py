@@ -3,15 +3,17 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.catalog import private_product_code
 from app.config import Settings
 from app.db import Base
+from app.jobs.service import batch_manage_runs
 from app.main import create_app
 from app.models import AuditLog, Meeting, Product, RunFile, RunItem, UpdateRun, User
 
@@ -300,6 +302,112 @@ def test_batch_rejects_empty_selection_and_unknown_action(tmp_path: Path) -> Non
     session = factory()
     try:
         assert session.get(UpdateRun, run_id).status == "completed"
+    finally:
+        session.close()
+
+
+def test_batch_rejects_runs_outside_the_current_history_page(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_ids = [
+            _create_run_with_artifacts(factory, tmp_path, directory=f"batch-limit-{index}")[0]
+            for index in range(51)
+        ]
+
+        response = client.post(
+            "/updates/batch",
+            data={
+                "token": _token(client, "/updates"),
+                "action": "delete",
+                "run_ids": [str(run_id) for run_id in run_ids],
+            },
+            follow_redirects=False,
+        )
+        history = client.get(response.headers["location"])
+
+    assert response.status_code == 303
+    assert "只能操作当前页显示的批次" in history.text
+    session = factory()
+    try:
+        assert session.get(UpdateRun, run_ids[0]).status == "completed"
+        assert session.get(UpdateRun, run_ids[-1]).status == "completed"
+    finally:
+        session.close()
+
+
+def test_batch_delete_rechecks_a_stale_run_status_under_lock(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app):
+        run_id, _, run_dir, _ = _create_run_with_artifacts(
+            factory, tmp_path, directory="batch-stale-processing"
+        )
+        session = factory()
+        concurrent_session = factory()
+        try:
+            assert session.get(UpdateRun, run_id).status == "completed"
+            concurrent_session.get(UpdateRun, run_id).status = "processing"
+            concurrent_session.commit()
+
+            result = batch_manage_runs(
+                session,
+                [run_id],
+                action="delete",
+                data_dir=tmp_path,
+                actor_id=1,
+            )
+
+            assert result.skipped_processing == 1
+            assert result.deleted == 0
+        finally:
+            session.close()
+            concurrent_session.close()
+
+    session = factory()
+    try:
+        assert session.get(UpdateRun, run_id) is not None
+    finally:
+        session.close()
+    assert run_dir.exists()
+
+
+def test_batch_requeue_does_not_commit_without_its_audit_log(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app):
+        run_id, _, _, _ = _create_run_with_artifacts(
+            factory, tmp_path, directory="batch-atomic-requeue"
+        )
+        session = factory()
+        try:
+            @event.listens_for(session, "before_commit")
+            def reject_queue_audit(active_session) -> None:
+                if any(
+                    isinstance(instance, AuditLog) and instance.action == "queue"
+                    for instance in active_session.new
+                ):
+                    raise RuntimeError("audit write failed")
+
+            with pytest.raises(RuntimeError, match="audit write failed"):
+                batch_manage_runs(
+                    session,
+                    [run_id],
+                    action="requeue",
+                    data_dir=tmp_path,
+                    actor_id=1,
+                )
+            session.rollback()
+        finally:
+            session.close()
+
+    session = factory()
+    try:
+        assert session.get(UpdateRun, run_id).status == "completed"
+        assert (
+            session.query(AuditLog)
+            .filter_by(action="queue", object_type="update_run", object_id=str(run_id))
+            .count()
+            == 0
+        )
     finally:
         session.close()
 

@@ -82,6 +82,7 @@ RUN_STATUS_LABELS = {
     "completed_with_warnings": "已完成，待复核",
     "failed": "处理失败",
 }
+HISTORY_PAGE_SIZE = 50
 
 
 def _parse_filter_date(value: str) -> date | None:
@@ -207,7 +208,9 @@ def create_app(
         user: User = Depends(current_user),
         session: Session = Depends(get_session),
     ):
-        runs = session.scalars(select(UpdateRun).order_by(UpdateRun.id.desc()).limit(50)).all()
+        runs = session.scalars(
+            select(UpdateRun).order_by(UpdateRun.id.desc()).limit(HISTORY_PAGE_SIZE)
+        ).all()
         return templates.TemplateResponse(
             request=request,
             name="updates.html",
@@ -245,9 +248,22 @@ def create_app(
             return RedirectResponse("/updates?notice=请选择至少一个批次", status_code=303)
         if action not in {"requeue", "delete"}:
             return RedirectResponse("/updates?notice=批量操作无效", status_code=303)
+        selected_run_ids = list(dict.fromkeys(run_ids))
+        visible_run_ids = set(
+            session.scalars(
+                select(UpdateRun.id).order_by(UpdateRun.id.desc()).limit(HISTORY_PAGE_SIZE)
+            )
+        )
+        if (
+            len(selected_run_ids) > HISTORY_PAGE_SIZE
+            or not set(selected_run_ids).issubset(visible_run_ids)
+        ):
+            return RedirectResponse(
+                "/updates?notice=只能操作当前页显示的批次", status_code=303
+            )
         result = batch_manage_runs(
             session,
-            run_ids,
+            selected_run_ids,
             action=action,
             data_dir=ensure_data_dir(app.state.settings),
             actor_id=user.id,
@@ -828,15 +844,9 @@ def create_app(
         run = session.get(UpdateRun, run_id)
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
-        queued = requeue_run(session, run_id)
+        queued = requeue_run(session, run_id, audit_actor_id=user.id)
         if queued is None:
             raise HTTPException(status_code=409, detail="批次正在处理中")
-        session.add(
-            AuditLog(
-                actor_id=user.id, action="queue", object_type="update_run", object_id=str(run_id)
-            )
-        )
-        session.commit()
         return RedirectResponse(f"/updates/{run_id}/preview", status_code=303)
 
     @app.post("/updates/{run_id}/items/{item_id}/resolve")
