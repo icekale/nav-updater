@@ -19,6 +19,7 @@ from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
 from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, UpdateRun
 from ..ocr.engine import OCRRecognizer, create_ocr_service
+from ..ocr.evidence import merge_metric_passes
 from ..ocr.table_parser import OCRMetricRow, extract_metric_rows
 from ..providers.public_fund import PublicFundProvider
 from ..time import china_now as utcnow
@@ -202,6 +203,61 @@ def _image_row_status(
     return "needs_review", message
 
 
+def needs_dense_second_pass(
+    row: OCRMetricRow | None,
+    expected_metrics: set[str],
+) -> bool:
+    if row is None:
+        return True
+    if row.blank_metrics:
+        return True
+    return bool(expected_metrics - set(row.metrics) - set(row.blank_metrics))
+
+
+def _same_ocr_row(first: OCRMetricRow, second: OCRMetricRow) -> bool:
+    if first.product_code and second.product_code:
+        return first.product_code == second.product_code
+    return normalize_ocr_name(first.product_name) == normalize_ocr_name(second.product_name)
+
+
+def _merge_image_rows(
+    first_rows: list[OCRMetricRow],
+    second_rows: list[OCRMetricRow] | None,
+    image: RunFile,
+) -> tuple[list[OCRMetricRow], dict[int, dict[str, object]]]:
+    merged_rows: list[OCRMetricRow] = []
+    row_evidence: dict[int, dict[str, object]] = {}
+    remaining = list(second_rows or [])
+    for first in first_rows:
+        second_index = next(
+            (index for index, candidate in enumerate(remaining) if _same_ocr_row(first, candidate)),
+            None,
+        )
+        second = remaining.pop(second_index) if second_index is not None else None
+        merged, evidence = merge_metric_passes(first, second)
+        evidence.update(
+            {
+                "source_file_id": image.id,
+                "image_name": image.original_name,
+                "image_sha256": image.sha256,
+            }
+        )
+        merged_rows.append(merged)
+        row_evidence[id(merged)] = evidence
+    for second in remaining:
+        merged, evidence = merge_metric_passes(second, None)
+        evidence.update(
+            {
+                "source_file_id": image.id,
+                "image_name": image.original_name,
+                "image_sha256": image.sha256,
+            }
+        )
+        merged_rows.append(merged)
+        row_evidence[id(merged)] = evidence
+    return merged_rows, row_evidence
+
+
 def _set_item(
     item: RunItem,
     *,
@@ -246,15 +302,28 @@ def process_run(
         if workbook is None:
             raise ValueError("run is missing workbook input")
         products = session.scalars(select(Product).where(Product.is_active.is_(True))).all()
-        screenshot_rows: list[OCRMetricRow] = []
-        for image in (item for item in files if item.file_type == "image"):
-            screenshot_rows.extend(extract_metric_rows(ocr_service.recognize_tiled(image.storage_path)))
-
         updates: dict[int, dict[str, Decimal | None]] = {}
         stale: dict[int, set[str]] = {}
         warnings = False
         items = session.scalars(select(RunItem).where(RunItem.run_id == run_id)).all()
         item_names = [str(item.original_values.get("product_name", "")) for item in items]
+        screenshot_rows: list[OCRMetricRow] = []
+        screenshot_evidence: dict[int, dict[str, object]] = {}
+        for image in (item for item in files if item.file_type == "image"):
+            first_rows = extract_metric_rows(ocr_service.recognize_tiled(image.storage_path))
+            dense_rows: list[OCRMetricRow] | None = None
+            dense_recognizer = getattr(ocr_service, "recognize_tiled_dense", None)
+            if callable(dense_recognizer) and any(
+                needs_dense_second_pass(
+                    _find_image_row(name, first_rows, products, item_names),
+                    set(ALL_METRICS),
+                )
+                for name in item_names
+            ):
+                dense_rows = extract_metric_rows(dense_recognizer(image.storage_path))
+            merged_rows, image_evidence = _merge_image_rows(first_rows, dense_rows, image)
+            screenshot_rows.extend(merged_rows)
+            screenshot_evidence.update(image_evidence)
         for item in items:
             name = str(item.original_values.get("product_name", ""))
             if item.match_source == "manual":
@@ -289,6 +358,7 @@ def process_run(
                     statuses=statuses,
                     error=error_reason,
                 )
+                item.ocr_evidence = screenshot_evidence.get(id(image_row), {})
                 updates[item.excel_row] = {
                     **image_row.metrics,
                     **dict.fromkeys(confirmed_blank_metrics),

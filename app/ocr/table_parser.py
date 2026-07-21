@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
 from .engine import OCRToken
@@ -29,6 +29,14 @@ class ParsedCell:
     text: str
     confidence: float
     left: float = 0.0
+    box: tuple[tuple[float, float], ...] = ()
+
+
+@dataclass(frozen=True)
+class MetricCellEvidence:
+    text: str
+    confidence: float
+    box: tuple[tuple[float, float], ...]
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,7 @@ class OCRMetricRow:
     metrics: dict[str, Decimal]
     confidence: float
     blank_metrics: frozenset[str] = frozenset()
+    metric_evidence: dict[str, MetricCellEvidence] = field(default_factory=dict)
 
 
 def group_rows(tokens: Iterable[OCRToken], y_tolerance: float = 12.0) -> list[ParsedRow]:
@@ -59,7 +68,7 @@ def group_rows(tokens: Iterable[OCRToken], y_tolerance: float = 12.0) -> list[Pa
     return [
         ParsedRow(
             tuple(
-                ParsedCell(token.text, token.confidence, token.left)
+                ParsedCell(token.text, token.confidence, token.left, token.box)
                 for token in sorted(row, key=lambda item: item.left)
             )
         )
@@ -153,6 +162,7 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
             )
             metrics: dict[str, Decimal] = {}
             blank_metrics: set[str] = set()
+            metric_evidence: dict[str, MetricCellEvidence] = {}
             confidence = product_cell.confidence
             metric_cells = _metric_cells_by_header(
                 row.cells,
@@ -165,6 +175,11 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
                 cell = metric_cells.get(key)
                 if not cell:
                     continue
+                metric_evidence[key] = MetricCellEvidence(
+                    text=cell.text,
+                    confidence=cell.confidence,
+                    box=cell.box,
+                )
                 if _is_source_blank(cell.text):
                     blank_metrics.add(key)
                     confidence = min(confidence, cell.confidence)
@@ -182,6 +197,7 @@ def extract_metric_rows(tokens: Iterable[OCRToken]) -> list[OCRMetricRow]:
                         metrics=metrics,
                         confidence=confidence,
                         blank_metrics=frozenset(blank_metrics),
+                        metric_evidence=metric_evidence,
                     )
                 )
     return results

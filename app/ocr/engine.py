@@ -33,6 +33,8 @@ class OCRToken:
 class OCRRecognizer(Protocol):
     def recognize_tiled(self, image: str | Path) -> list[OCRToken]: ...
 
+    def recognize_tiled_dense(self, image: str | Path) -> list[OCRToken]: ...
+
 
 class PaddleOCRConfigurationError(ValueError):
     pass
@@ -87,6 +89,9 @@ class OCRService:
                 break
             offset_y += tile_height - overlap
         return _deduplicate_tokens(tokens)
+
+    def recognize_tiled_dense(self, image: str | Path) -> list[OCRToken]:
+        return self.recognize_tiled(image, tile_height=800, overlap=192)
 
 
 def create_ocr_service(settings: Settings | None = None) -> OCRRecognizer:
