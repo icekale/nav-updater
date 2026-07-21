@@ -6,12 +6,15 @@ from collections.abc import Callable
 from ..config import ensure_data_dir
 from ..db import SessionLocal
 from .processor import process_run
+from .regression_worker import run_once as run_regression_once
 from .service import claim_next_run, fail_run
 
 Processor = Callable[[int], None]
 
 
 def run_once(processor: Processor) -> bool:
+    if run_regression_once():
+        return True
     session = SessionLocal()
     try:
         run = claim_next_run(session)

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,6 +18,8 @@ from app.models import (
     User,
 )
 from app.ocr.regression import (
+    claim_next_regression,
+    compare_sample,
     copy_sample_image,
     import_confirmed_samples,
     promote_confirmed_case,
@@ -166,3 +168,71 @@ def test_promote_case_deduplicates_same_image_product_and_expected_values(tmp_pa
     assert first.id == second.id
     assert second.expected_product_code == product.product_code
     assert second.source_run_id == run.id
+
+
+def test_compare_sample_reports_value_and_status_mismatches() -> None:
+    sample = OcrRegressionSample(
+        expected_product_code="P001",
+        expected_metric_values={"mtd": "-0.0633", "ytd": "0.2567"},
+        expected_metric_status={"mtd": "extracted", "ytd": "extracted"},
+    )
+
+    passed = compare_sample(
+        sample,
+        actual_product_code="P001",
+        actual_values={"mtd": "-0.0633", "ytd": "0.2567"},
+        actual_status={"mtd": "extracted", "ytd": "extracted"},
+    )
+    mismatch = compare_sample(
+        sample,
+        actual_product_code="P001",
+        actual_values={"mtd": "", "ytd": "0.2567"},
+        actual_status={"mtd": "source_blank", "ytd": "extracted"},
+    )
+
+    assert passed.outcome == "passed"
+    assert mismatch.outcome == "status_mismatch"
+    assert "mtd" in mismatch.detail
+
+
+def test_claim_next_regression_moves_queued_run_to_running() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    run = OcrRegressionRun(requested_by=admin.id, status="queued")
+    session.add(run)
+    session.commit()
+
+    claimed = claim_next_regression(session, now=datetime(2026, 7, 21, 10, 0))
+
+    assert claimed is not None
+    assert claimed.status == "running"
+    assert claimed.started_at == datetime(2026, 7, 21, 10, 0)
+
+
+def test_regression_worker_runs_claimed_task(monkeypatch, tmp_path: Path) -> None:
+    from app.jobs import regression_worker
+
+    calls: list[tuple[int, Path]] = []
+
+    class FakeSession:
+        def close(self) -> None:
+            calls.append((-1, tmp_path))
+
+    class FakeRun:
+        id = 7
+
+    monkeypatch.setattr(regression_worker, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(regression_worker, "claim_next_regression", lambda session: FakeRun())
+    monkeypatch.setattr(
+        regression_worker,
+        "run_regression",
+        lambda session, run_id, samples_root: calls.append((run_id, samples_root)),
+    )
+    monkeypatch.setattr(regression_worker, "ensure_data_dir", lambda: tmp_path)
+
+    assert regression_worker.run_once() is True
+    assert (7, tmp_path / "ocr-quality" / "samples") in calls
