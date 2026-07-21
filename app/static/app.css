@@ -168,6 +168,12 @@ td:last-child, th:last-child { white-space: nowrap; }
 
 .status-failed { background: #fce8e8; color: #8a2525; }
 
+.status-normal { background: #eaf5ee; color: #24623c; }
+
+.status-never_updated, .status-outdated { background: #fff4de; color: #875d1d; }
+
+.status-missing_data { background: #fff0f0; color: #a23c3c; }
+
 .error { padding: 10px; border-radius: 4px; background: #fff0f0; color: #a23c3c; }
 
 .notice { padding: 10px; border-radius: 4px; background: #eaf5ee; color: #24623c; }
@@ -195,6 +201,24 @@ td:last-child, th:last-child { white-space: nowrap; }
 .quality-kpi strong { color: #1d2d35; font-size: 24px; line-height: 1.1; }
 
 .quality-section { margin-top: 30px; }
+
+.monitoring-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+
+.monitoring-kpi { display: grid; gap: 5px; min-width: 0; padding: 15px 16px; border: 1px solid #d7e0e3; border-top: 3px solid #126c70; background: #ffffff; }
+
+.monitoring-kpi span { color: #526b73; font-size: 12px; font-weight: 700; }
+
+.monitoring-kpi strong { color: #1d2d35; font-size: 24px; line-height: 1.1; }
+
+.monitoring-filter { max-width: none; margin-bottom: 24px; }
+
+.monitoring-filter-grid { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(170px, 1fr) auto; gap: 14px; align-items: end; }
+
+.monitoring-filter-grid label { margin-bottom: 0; }
+
+.monitoring-section { margin-top: 30px; }
+
+.monitoring-table { min-width: 980px; }
 
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
 
@@ -298,6 +322,7 @@ td:last-child, th:last-child { white-space: nowrap; }
   .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .meeting-detail-grid { grid-template-columns: 1fr; }
   .quality-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .monitoring-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 799px) {
@@ -311,7 +336,8 @@ td:last-child, th:last-child { white-space: nowrap; }
   .batch-toolbar { align-items: flex-start; flex-wrap: wrap; }
   .page-heading, .result-summary { align-items: flex-start; flex-direction: column; }
   .quality-kpis { grid-template-columns: 1fr; }
+  .monitoring-kpis { grid-template-columns: 1fr; }
   .section-heading { align-items: flex-start; flex-direction: column; }
-  .review-meta, .filter-grid, .source-meta { grid-template-columns: 1fr; }
+  .review-meta, .filter-grid, .monitoring-filter-grid, .source-meta { grid-template-columns: 1fr; }
   .review-actions, .import-panel, .import-form { align-items: flex-start; flex-direction: column; }
 }

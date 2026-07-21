@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}产品监控 | 投研净值更新工具{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">PRIVATE PRODUCT MONITORING</p>
+    <h1>产品监控</h1>
+    <p class="muted">全部启用私募产品的最新业绩与更新状态。</p>
+  </div>
+  <a class="primary button" href="{{ export_url }}">导出当前清单</a>
+</div>
+
+<section class="monitoring-kpis" aria-label="私募产品监控概览">
+  <article class="monitoring-kpi"><span>启用私募产品</span><strong>{{ dashboard.total_count }}</strong></article>
+  <article class="monitoring-kpi"><span>正常</span><strong>{{ dashboard.normal_count }}</strong></article>
+  <article class="monitoring-kpi"><span>从未更新</span><strong>{{ dashboard.never_updated_count }}</strong></article>
+  <article class="monitoring-kpi"><span>数据缺失</span><strong>{{ dashboard.missing_data_count }}</strong></article>
+  <article class="monitoring-kpi"><span>更新过期</span><strong>{{ dashboard.outdated_count }}</strong></article>
+</section>
+
+<form class="form-panel monitoring-filter" method="get" action="/monitoring">
+  <div class="monitoring-filter-grid">
+    <label>搜索产品
+      <input type="search" name="search" value="{{ search }}" placeholder="产品名称或代码">
+    </label>
+    <label>数据状态
+      <select name="status">
+        <option value="all"{% if status_filter == 'all' %} selected{% endif %}>全部状态</option>
+        {% for status, label in status_labels.items() %}<option value="{{ status }}"{% if status_filter == status %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="filter-actions"><button class="primary" type="submit">筛选</button><a class="text-action" href="/monitoring">清除</a></div>
+  </div>
+</form>
+
+<section class="monitoring-section">
+  <div class="section-heading"><div><p class="eyebrow">EXCEPTIONS</p><h2>异常清单</h2></div><p class="muted">从未更新、数据缺失和更新过期优先处理。</p></div>
+  {% if dashboard.exceptions %}
+  <div class="table-wrap"><table class="monitoring-table"><thead><tr><th>产品</th><th>产品代码</th><th>数据状态</th><th>异常说明</th><th>最近净值截止日</th><th>操作</th></tr></thead><tbody>
+  {% for row in dashboard.exceptions %}<tr><td>{{ row.product_name }}</td><td>{{ row.product_code }}</td><td><span class="status status-{{ row.status }}">{{ row.status_label }}</span></td><td>{{ row.reason }}</td><td>{{ row.cutoff_date or '—' }}</td><td class="table-actions">{% if row.run_id %}<a class="text-action" href="/updates/{{ row.run_id }}/preview">查看批次</a>{% endif %}{% if row.status == 'missing_data' and row.run_item_id %}<a class="text-action" href="/updates/{{ row.run_id }}/review?show_all=1#review-item-{{ row.run_item_id }}">去审核</a>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">当前筛选条件下没有异常产品。</p>{% endif %}
+</section>
+
+<section class="monitoring-section">
+  <div class="section-heading"><div><p class="eyebrow">ALL PRODUCTS</p><h2>全部产品</h2></div><p class="muted">展示近一周、MTD 与 YTD 指标。</p></div>
+  {% if dashboard.rows %}
+  <div class="table-wrap"><table class="monitoring-table"><thead><tr><th>产品</th><th>产品代码</th><th>最近净值截止日</th><th>最近处理时间</th><th>近一周</th><th>MTD</th><th>YTD</th><th>数据状态</th><th>操作</th></tr></thead><tbody>
+  {% for row in dashboard.rows %}<tr><td>{{ row.product_name }}</td><td>{{ row.product_code }}</td><td>{{ row.cutoff_date or '—' }}</td><td>{% if row.processed_at %}{{ row.processed_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</td><td>{% if row.metric_values.get('weekly') is not none %}{{ '%.2f'|format(row.metric_values.get('weekly') * 100) }}%{% else %}—{% endif %}</td><td>{% if row.metric_values.get('mtd') is not none %}{{ '%.2f'|format(row.metric_values.get('mtd') * 100) }}%{% else %}—{% endif %}</td><td>{% if row.metric_values.get('ytd') is not none %}{{ '%.2f'|format(row.metric_values.get('ytd') * 100) }}%{% else %}—{% endif %}</td><td><span class="status status-{{ row.status }}">{{ row.status_label }}</span></td><td class="table-actions">{% if row.run_id %}<a class="text-action" href="/updates/{{ row.run_id }}/preview">查看批次</a>{% endif %}{% if row.status == 'missing_data' and row.run_item_id %}<a class="text-action" href="/updates/{{ row.run_id }}/review?show_all=1#review-item-{{ row.run_item_id }}">去审核</a>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">没有符合当前筛选条件的产品。</p>{% endif %}
+</section>
+{% endblock %}

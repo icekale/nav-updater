@@ -2,10 +2,11 @@ import re
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import create_engine, event
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -532,6 +533,66 @@ def test_quality_center_renders_metrics_and_review_links(tmp_path: Path) -> None
     assert "漏识别" in response.text
     assert "source_blank" not in response.text
     assert f'/updates/{run_id}/review?show_all=1#review-item-{item_id}' in response.text
+
+
+def test_private_product_monitoring_requires_login_renders_and_exports(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        page_without_login = client.get("/monitoring", follow_redirects=False)
+        export_without_login = client.get("/monitoring/export.xlsx", follow_redirects=False)
+        assert page_without_login.status_code == 303
+        assert page_without_login.headers["location"] == "/login"
+        assert export_without_login.status_code == 303
+        assert export_without_login.headers["location"] == "/login"
+
+        _login_as_admin(client)
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            product = Product(
+                product_name="监控产品", product_code="MONITOR-001", product_type="private"
+            )
+            session.add(product)
+            session.flush()
+            run = UpdateRun(
+                operator_id=admin.id,
+                cutoff_date=date(2026, 7, 20),
+                status="completed_with_warnings",
+            )
+            session.add(run)
+            session.flush()
+            item = RunItem(
+                run_id=run.id,
+                product_id=product.id,
+                excel_row=2,
+                row_status="stale",
+                metric_status={"weekly": "stale"},
+            )
+            session.add(item)
+            session.flush()
+            run_id = run.id
+            item_id = item.id
+            session.commit()
+        finally:
+            session.close()
+
+        response = client.get("/monitoring?status=missing_data")
+        exported = client.get("/monitoring/export.xlsx?status=missing_data")
+
+    assert response.status_code == 200
+    assert "产品监控" in response.text
+    assert "数据缺失" in response.text
+    assert "导出当前清单" in response.text
+    assert f'/updates/{run_id}/review?show_all=1#review-item-{item_id}' in response.text
+    assert exported.status_code == 200
+    assert (
+        exported.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "filename*=" in exported.headers["content-disposition"]
+    assert "私募产品监控" in unquote(exported.headers["content-disposition"])
+    workbook = load_workbook(BytesIO(exported.content), data_only=True)
+    assert workbook.active.max_row == 2
 
 
 def test_history_page_renders_batch_controls_for_visible_runs(tmp_path: Path) -> None:

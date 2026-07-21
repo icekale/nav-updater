@@ -15,6 +15,7 @@
         <a class="nav-link{% if request.url.path == '/updates' %} is-active{% endif %}" href="/updates"{% if request.url.path == '/updates' %} aria-current="page"{% endif %}>更新历史</a>
         <a class="nav-link{% if request.url.path == '/updates/new' %} is-active{% endif %}" href="/updates/new"{% if request.url.path == '/updates/new' %} aria-current="page"{% endif %}>新建更新</a>
         <a class="nav-link{% if request.url.path == '/quality' %} is-active{% endif %}" href="/quality"{% if request.url.path == '/quality' %} aria-current="page"{% endif %}>质检中心</a>
+        <a class="nav-link{% if request.url.path.startswith('/monitoring') %} is-active{% endif %}" href="/monitoring"{% if request.url.path.startswith('/monitoring') %} aria-current="page"{% endif %}>产品监控</a>
         <a class="nav-link{% if request.url.path.startswith('/meetings') %} is-active{% endif %}" href="/meetings"{% if request.url.path.startswith('/meetings') %} aria-current="page"{% endif %}>会议跟踪</a>
         <a class="nav-link{% if request.url.path.startswith('/catalog') %} is-active{% endif %}" href="/catalog"{% if request.url.path.startswith('/catalog') %} aria-current="page"{% endif %}>产品目录</a>
         {% if user.role == 'admin' %}<a class="nav-link{% if request.url.path.startswith('/admin/users') %} is-active{% endif %}" href="/admin/users"{% if request.url.path.startswith('/admin/users') %} aria-current="page"{% endif %}>账号管理</a>{% endif %}

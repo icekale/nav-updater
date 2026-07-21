@@ -7,8 +7,8 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, update
@@ -55,6 +55,7 @@ from .jobs.service import (
 )
 from .meetings import MeetingImportError, import_meetings
 from .models import AuditLog, Meeting, Product, UpdateRun, User
+from .monitoring import STATUS_LABELS, build_monitoring_dashboard, monitoring_workbook_bytes
 from .quality import build_quality_dashboard
 
 ATTENDANCE_OPTIONS = (
@@ -238,6 +239,58 @@ def create_app(
                 "user": user,
                 "quality": build_quality_dashboard(session),
                 "csrf_token": csrf_token(request),
+            },
+        )
+
+    @app.get("/monitoring", response_class=HTMLResponse)
+    def monitoring_page(
+        request: Request,
+        search: str = "",
+        status_filter: str = Query("all", alias="status"),
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        status_filter = status_filter if status_filter in STATUS_LABELS else "all"
+        dashboard = build_monitoring_dashboard(
+            session,
+            search=search,
+            status_filter=status_filter,
+        )
+        export_query = urlencode({"search": search.strip(), "status": status_filter})
+        return templates.TemplateResponse(
+            request=request,
+            name="monitoring.html",
+            context={
+                "user": user,
+                "dashboard": dashboard,
+                "search": search,
+                "status_filter": status_filter,
+                "status_labels": STATUS_LABELS,
+                "export_url": f"/monitoring/export.xlsx?{export_query}",
+                "csrf_token": csrf_token(request),
+            },
+        )
+
+    @app.get("/monitoring/export.xlsx")
+    def monitoring_export(
+        search: str = "",
+        status_filter: str = Query("all", alias="status"),
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        dashboard = build_monitoring_dashboard(
+            session,
+            search=search,
+            status_filter=status_filter,
+        )
+        return Response(
+            monitoring_workbook_bytes(dashboard.rows),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename*=UTF-8''"
+                    "%E7%A7%81%E5%8B%9F%E4%BA%A7%E5%93%81%E7%9B%91%E6%8E%A7.xlsx"
+                )
             },
         )
 
