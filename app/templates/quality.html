@@ -7,6 +7,7 @@
     <p class="muted">基于人工审核确认的最新样本，定位高频漏识别和需关注产品。</p>
   </div>
 </div>
+{% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
 
 <section class="quality-kpis" aria-label="OCR 质量概览">
   <article class="quality-kpi"><span>字段一致率</span><strong>{% if quality.field_accuracy is none %}—{% else %}{{ "%.1f"|format(quality.field_accuracy * 100) }}%{% endif %}</strong><small>仅统计人工确认字段</small></article>
@@ -14,6 +15,78 @@
   <article class="quality-kpi"><span>漏识别</span><strong>{{ quality.missing_count }}</strong><small>人工有值、OCR 未提取</small></article>
   <article class="quality-kpi"><span>已确认空值</span><strong>{{ quality.source_blank_count }}</strong><small>自动留空，仅作观察</small></article>
   <article class="quality-kpi"><span>产品已改正</span><strong>{{ quality.product_corrected_count }}</strong><small>另有 {{ quality.product_unmatched_count }} 条未匹配</small></article>
+</section>
+
+<section class="quality-regression quality-section" aria-labelledby="regression-heading">
+  <div class="section-heading">
+    <div><p class="eyebrow">REGRESSION LOOP</p><h2 id="regression-heading">OCR 回归验证</h2></div>
+    <p class="muted">用已确认样本验证当前识别规则，不修改生产批次。</p>
+  </div>
+  <div class="regression-panel">
+    <div class="regression-summary">
+      <div><span>启用样本</span><strong>{{ quality.regression.sample_count }}</strong></div>
+      <div><span>最近运行</span><strong>{% if quality.regression.latest_run_at %}{{ quality.regression.latest_run_at.strftime("%Y-%m-%d %H:%M") }}{% else %}—{% endif %}</strong></div>
+      <div><span>通过</span><strong class="regression-pass">{{ quality.regression.passed_count }}</strong></div>
+      <div><span>失败</span><strong class="regression-fail">{{ quality.regression.failed_count }}</strong></div>
+      <div><span>未执行</span><strong>{{ quality.regression.skipped_count }}</strong></div>
+    </div>
+    {% if quality.regression.latest_status %}
+    <p class="regression-run-status">最近状态：<span class="status status-{{ quality.regression.latest_status }}">{{ regression_status_labels.get(quality.regression.latest_status, quality.regression.latest_status) }}</span></p>
+    {% endif %}
+    {% if user.role == 'admin' %}
+    <div class="regression-actions">
+      <form method="post" action="/quality/samples/import" class="regression-form">
+        <input type="hidden" name="token" value="{{ csrf_token }}">
+        <label>来源批次编号<input type="number" name="run_id" min="1" placeholder="例如 12" required></label>
+        <button class="primary" type="submit">导入历史样本</button>
+      </form>
+      <form method="post" action="/quality/samples/promote" class="regression-form">
+        <input type="hidden" name="token" value="{{ csrf_token }}">
+        <label>审核样本编号<input type="number" name="review_sample_id" min="1" placeholder="例如 68" required></label>
+        <label>原图文件编号<input type="number" name="source_file_id" min="1" placeholder="多图批次必填"></label>
+        <button class="primary" type="submit">提升已复核样本</button>
+      </form>
+      <form method="post" action="/quality/regression/run" class="regression-form">
+        <input type="hidden" name="token" value="{{ csrf_token }}">
+        <button class="button secondary-button" type="submit">运行回归验证</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if quality.regression.failures %}
+  <div class="section-heading regression-failure-heading"><div><p class="eyebrow">LATEST FAILURES</p><h3>最近失败样本</h3></div><p class="muted">最多展示 10 条</p></div>
+  <div class="table-wrap">
+    <table class="quality-table regression-failure-table">
+      <thead><tr><th>产品</th><th>结果</th><th>说明</th><th>预期</th><th>实际</th><th>证据</th></tr></thead>
+      <tbody>
+      {% for failure in quality.regression.failures %}
+      <tr>
+        <td>{{ failure.product_name }}</td>
+        <td><span class="status status-failed">{{ regression_outcome_labels.get(failure.outcome, failure.outcome) }}</span></td>
+        <td>{{ failure.detail }}</td>
+        <td><code>{{ failure.expected|tojson }}</code></td>
+        <td><code>{{ failure.actual|tojson }}</code></td>
+        <td class="table-actions"><a class="text-action" href="/quality/samples/{{ failure.sample_id }}/image" target="_blank" rel="noreferrer">查看样本图</a>{% if failure.source_run_id and failure.source_item_id %}<a class="text-action" href="/updates/{{ failure.source_run_id }}/review?show_all=1#review-item-{{ failure.source_item_id }}">去审核</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif quality.regression.latest_run_id %}
+  <p class="muted regression-empty">最近一次回归没有失败样本。</p>
+  {% else %}
+  <p class="muted regression-empty">尚未运行回归验证。先导入已确认样本，再运行回归。</p>
+  {% endif %}
+</section>
+
+<section class="quality-section" aria-labelledby="sample-heading">
+  <div class="section-heading"><div><p class="eyebrow">SAMPLE LIBRARY</p><h2 id="sample-heading">回归样本库</h2></div><p class="muted">样本图片独立保存，不随更新历史删除。</p></div>
+  {% if regression_samples %}
+  <div class="table-wrap"><table class="quality-table sample-table"><thead><tr><th>产品</th><th>来源</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead><tbody>
+  {% for sample in regression_samples %}<tr><td>{{ sample.excel_product_name }}</td><td>{{ sample.source_label }}</td><td>{{ sample.created_at.strftime("%Y-%m-%d %H:%M") }}</td><td><span class="status {% if sample.is_active %}status-ready{% else %}status-stale{% endif %}">{% if sample.is_active %}已启用{% else %}已停用{% endif %}</span></td><td class="table-actions"><a class="text-action" href="/quality/samples/{{ sample.id }}/image" target="_blank" rel="noreferrer">查看图片</a>{% if user.role == 'admin' %}<form method="post" action="/quality/samples/{{ sample.id }}/enable" class="inline-form"><input type="hidden" name="token" value="{{ csrf_token }}"><button type="submit" class="text-action sample-toggle">{% if sample.is_active %}停用{% else %}启用{% endif %}</button></form>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">暂无回归样本。</p>{% endif %}
 </section>
 
 <section class="quality-section">

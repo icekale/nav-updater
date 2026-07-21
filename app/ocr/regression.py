@@ -400,16 +400,16 @@ def _create_or_get_sample(
         is_active=True,
     )
     session.add(sample)
+    session.flush()
     session.add(
         AuditLog(
             actor_id=actor_id,
             action="create",
             object_type="ocr_regression_sample",
-            object_id="pending",
+            object_id=str(sample.id),
             context={"source_label": source_label, "product_name": product_name},
         )
     )
-    session.flush()
     return sample, True
 
 

@@ -202,6 +202,50 @@ td:last-child, th:last-child { white-space: nowrap; }
 
 .quality-section { margin-top: 30px; }
 
+.quality-regression { margin-top: 28px; }
+
+.regression-panel { padding: 18px; border: 1px solid #d7e0e3; border-top: 3px solid #126c70; background: #ffffff; }
+
+.regression-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+
+.regression-summary div { display: grid; gap: 5px; min-width: 0; }
+
+.regression-summary span { color: #617078; font-size: 12px; font-weight: 700; }
+
+.regression-summary strong { color: #1d2d35; font-size: 20px; line-height: 1.15; }
+
+.regression-summary .regression-pass { color: #24623c; }
+
+.regression-summary .regression-fail { color: #a23c3c; }
+
+.regression-run-status { margin: 16px 0 0; color: #526b73; font-size: 13px; }
+
+.regression-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin-top: 18px; padding-top: 16px; border-top: 1px solid #e3eaec; }
+
+.regression-form { display: flex; align-items: end; gap: 10px; }
+
+.regression-form label { min-width: 150px; margin: 0; color: #344952; font-size: 13px; }
+
+.regression-form input { width: 100%; }
+
+.secondary-button { padding: 10px 16px; border-radius: 4px; background: #e4eaec; color: #2a444f; }
+
+.secondary-button:hover { background: #d7e0e3; }
+
+.regression-failure-heading { margin-top: 22px; }
+
+.regression-failure-heading h3 { margin: 0; color: #1d2d35; font-size: 16px; }
+
+.regression-failure-table { min-width: 1120px; }
+
+.regression-failure-table code { display: block; max-width: 260px; overflow-wrap: anywhere; color: #526b73; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
+
+.regression-empty { margin: 14px 0 0; }
+
+.sample-table { min-width: 760px; }
+
+.sample-toggle { padding: 0; border: 0; background: transparent; cursor: pointer; font: inherit; }
+
 .monitoring-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
 
 .monitoring-kpi { display: grid; gap: 5px; min-width: 0; padding: 15px 16px; border: 1px solid #d7e0e3; border-top: 3px solid #126c70; background: #ffffff; }
@@ -322,6 +366,7 @@ td:last-child, th:last-child { white-space: nowrap; }
   .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .meeting-detail-grid { grid-template-columns: 1fr; }
   .quality-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .regression-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .monitoring-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
@@ -336,8 +381,10 @@ td:last-child, th:last-child { white-space: nowrap; }
   .batch-toolbar { align-items: flex-start; flex-wrap: wrap; }
   .page-heading, .result-summary { align-items: flex-start; flex-direction: column; }
   .quality-kpis { grid-template-columns: 1fr; }
+  .regression-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monitoring-kpis { grid-template-columns: 1fr; }
   .section-heading { align-items: flex-start; flex-direction: column; }
   .review-meta, .filter-grid, .monitoring-filter-grid, .source-meta { grid-template-columns: 1fr; }
-  .review-actions, .import-panel, .import-form { align-items: flex-start; flex-direction: column; }
+  .review-actions, .import-panel, .import-form, .regression-actions, .regression-form { align-items: flex-start; flex-direction: column; }
+  .regression-form { width: 100%; }
 }

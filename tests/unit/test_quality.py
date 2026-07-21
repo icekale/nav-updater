@@ -5,7 +5,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models import OcrReviewSample, Product, RunItem, UpdateRun, User
+from app.models import (
+    OcrRegressionResult,
+    OcrRegressionRun,
+    OcrRegressionSample,
+    OcrReviewSample,
+    Product,
+    RunItem,
+    UpdateRun,
+    User,
+)
 from app.quality import build_quality_dashboard
 
 
@@ -124,3 +133,53 @@ def test_quality_dashboard_uses_latest_samples_in_the_last_30_days() -> None:
     assert weekly.accuracy == Decimal("0.3333")
     assert dashboard.pending_review_count == 2
     assert dashboard.source_blank_count == 1
+
+
+def test_quality_dashboard_includes_latest_regression_summary() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    admin = User(username="admin", password_hash="hash", role="admin")
+    session.add(admin)
+    session.flush()
+    sample = OcrRegressionSample(
+        image_path="/data/ocr-quality/samples/a.png",
+        image_sha256="a" * 64,
+        source_label="管理员复核案例",
+        excel_product_name="产品A",
+        candidate_names=["产品A"],
+        expected_product_code="P001",
+        expected_metric_values={"mtd": "-0.0633"},
+        expected_metric_status={"mtd": "extracted"},
+        note="确认",
+        is_active=True,
+    )
+    session.add(sample)
+    session.flush()
+    run = OcrRegressionRun(
+        requested_by=admin.id,
+        status="completed",
+        total_count=1,
+        passed_count=0,
+        failed_count=1,
+        finished_at=datetime(2026, 7, 21, 10, 0),
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        OcrRegressionResult(
+            run_id=run.id,
+            sample_id=sample.id,
+            outcome="value_mismatch",
+            expected={"mtd": "-0.0633"},
+            actual={"mtd": ""},
+            detail="数值不一致：mtd",
+        )
+    )
+    session.commit()
+
+    dashboard = build_quality_dashboard(session, now=datetime(2026, 7, 21, 11, 0))
+
+    assert dashboard.regression.total_count == 1
+    assert dashboard.regression.failed_count == 1
+    assert dashboard.regression.failures[0].outcome == "value_mismatch"

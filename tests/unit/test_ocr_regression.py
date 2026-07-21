@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models import (
+    AuditLog,
     OcrRegressionResult,
     OcrRegressionRun,
     OcrRegressionSample,
@@ -125,6 +126,8 @@ def test_promote_review_sample_copies_image_and_keeps_expected_values(tmp_path: 
     assert promoted.source_item_id == item.id
     assert promoted.expected_product_code == product.product_code
     assert Path(promoted.image_path).read_bytes() == Path(image_files[0].storage_path).read_bytes()
+    audit = session.query(AuditLog).filter_by(object_type="ocr_regression_sample").one()
+    assert audit.object_id == str(promoted.id)
 
 
 def test_import_history_skips_multi_image_run_without_source_choice(tmp_path: Path) -> None:
