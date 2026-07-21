@@ -223,6 +223,79 @@ def test_batch_requeue_moves_each_completed_run_back_to_the_queue(tmp_path: Path
         session.close()
 
 
+def test_batch_delete_preserves_processing_run_and_deletes_completed_runs(
+    tmp_path: Path,
+) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        completed_id, _, completed_dir, _ = _create_run_with_artifacts(
+            factory, tmp_path, directory="batch-delete"
+        )
+        processing_id, _, processing_dir, _ = _create_run_with_artifacts(
+            factory, tmp_path, status="processing", directory="batch-processing"
+        )
+
+        response = client.post(
+            "/updates/batch",
+            data={
+                "token": _token(client, "/updates"),
+                "action": "delete",
+                "run_ids": [str(completed_id), str(processing_id)],
+            },
+            follow_redirects=False,
+        )
+        history = client.get(response.headers["location"])
+
+    assert response.status_code == 303
+    assert "已删除 1 个批次，跳过处理中 1 个" in history.text
+    session = factory()
+    try:
+        assert session.get(UpdateRun, completed_id) is None
+        assert session.get(UpdateRun, processing_id) is not None
+        assert session.query(AuditLog).filter_by(
+            action="delete", object_type="update_run", object_id=str(completed_id)
+        ).count() == 1
+    finally:
+        session.close()
+    assert not completed_dir.exists()
+    assert processing_dir.exists()
+
+
+def test_batch_rejects_empty_selection_and_unknown_action(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path, directory="batch-input")
+
+        empty = client.post(
+            "/updates/batch",
+            data={"token": _token(client, "/updates"), "action": "requeue"},
+            follow_redirects=False,
+        )
+        empty_history = client.get(empty.headers["location"])
+        unknown = client.post(
+            "/updates/batch",
+            data={
+                "token": _token(client, "/updates"),
+                "action": "unknown",
+                "run_ids": str(run_id),
+            },
+            follow_redirects=False,
+        )
+        unknown_history = client.get(unknown.headers["location"])
+
+    assert empty.status_code == 303
+    assert "请选择至少一个批次" in empty_history.text
+    assert unknown.status_code == 303
+    assert "批量操作无效" in unknown_history.text
+    session = factory()
+    try:
+        assert session.get(UpdateRun, run_id).status == "completed"
+    finally:
+        session.close()
+
+
 def test_deleting_completed_run_removes_artifacts_and_old_audit_logs(
     tmp_path: Path,
 ) -> None:
