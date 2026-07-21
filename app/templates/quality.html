@@ -38,7 +38,7 @@
   <div class="section-heading"><div><p class="eyebrow">RECENT ISSUES</p><h2>最近问题</h2></div></div>
   {% if quality.recent_issues %}
   <div class="table-wrap"><table class="quality-table"><thead><tr><th>产品</th><th>问题指标</th><th>结果</th><th>审核时间</th><th>操作</th></tr></thead><tbody>
-  {% for issue in quality.recent_issues %}<tr><td>{{ issue.product_name }}</td><td>{{ issue.metric_label }}</td><td><span class="status status-needs_review">{{ issue.outcome }}</span></td><td>{{ issue.reviewed_at.strftime("%Y-%m-%d %H:%M") }}</td><td><a class="link-button dark" href="/updates/{{ issue.run_id }}/review#review-item-{{ issue.run_item_id }}">去审核</a></td></tr>{% endfor %}
+  {% for issue in quality.recent_issues %}<tr><td>{{ issue.product_name }}</td><td>{{ issue.metric_label }}</td><td><span class="status status-needs_review">{{ issue.outcome }}</span></td><td>{{ issue.reviewed_at.strftime("%Y-%m-%d %H:%M") }}</td><td><a class="link-button dark" href="/updates/{{ issue.run_id }}/review?show_all=1#review-item-{{ issue.run_item_id }}">去审核</a></td></tr>{% endfor %}
   </tbody></table></div>
   {% else %}<p class="muted">暂无需要处理的问题。</p>{% endif %}
 </section>

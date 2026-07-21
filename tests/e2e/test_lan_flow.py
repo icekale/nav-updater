@@ -502,7 +502,7 @@ def test_quality_center_renders_metrics_and_review_links(tmp_path: Path) -> None
             session.flush()
             item = session.get(RunItem, item_id)
             assert item is not None
-            item.row_status = "needs_review"
+            item.row_status = "ready"
             item.metric_status = {"mtd": "source_blank"}
             session.add(
                 OcrReviewSample(
@@ -531,7 +531,7 @@ def test_quality_center_renders_metrics_and_review_links(tmp_path: Path) -> None
     assert "字段一致率" in response.text
     assert "漏识别" in response.text
     assert "source_blank" not in response.text
-    assert f'/updates/{run_id}/review#review-item-{item_id}' in response.text
+    assert f'/updates/{run_id}/review?show_all=1#review-item-{item_id}' in response.text
 
 
 def test_history_page_renders_batch_controls_for_visible_runs(tmp_path: Path) -> None:
