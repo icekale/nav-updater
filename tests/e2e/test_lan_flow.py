@@ -296,6 +296,25 @@ def test_batch_rejects_empty_selection_and_unknown_action(tmp_path: Path) -> Non
         session.close()
 
 
+def test_history_page_renders_batch_controls_for_visible_runs(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        first_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path, directory="batch-ui-a")
+        second_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path, directory="batch-ui-b")
+        response = client.get("/updates")
+        stylesheet = client.get("/static/app.css")
+
+    assert 'id="batch-run-form"' in response.text
+    assert 'id="select-all-runs"' in response.text
+    assert f'name="run_ids" value="{first_id}"' in response.text
+    assert f'name="run_ids" value="{second_id}"' in response.text
+    assert 'name="action" value="requeue"' in response.text
+    assert 'name="action" value="delete"' in response.text
+    assert "确定永久删除所选批次及其上传文件和结果文件吗？" in response.text
+    assert ".batch-toolbar" in stylesheet.text
+
+
 def test_deleting_completed_run_removes_artifacts_and_old_audit_logs(
     tmp_path: Path,
 ) -> None:

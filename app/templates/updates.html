@@ -5,12 +5,21 @@
   <a class="primary button" href="/updates/new">新建更新</a>
 </div>
 {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+<form id="batch-run-form" method="post" action="/updates/batch">
+  <input type="hidden" name="token" value="{{ csrf_token }}">
+  <div id="batch-toolbar" class="batch-toolbar" hidden aria-live="polite">
+    <span id="selected-run-count">已选 0 条</span>
+    <button class="button" type="submit" name="action" value="requeue">重新生成结果</button>
+    <button class="danger-button" type="submit" name="action" value="delete">永久删除</button>
+  </div>
+</form>
 <div class="table-wrap">
   <table>
-    <thead><tr><th>批次</th><th>截止日</th><th>状态</th><th>创建账号</th><th>创建时间</th><th>操作</th></tr></thead>
+    <thead><tr><th class="selection-cell"><input id="select-all-runs" type="checkbox" aria-label="全选当前页批次" {% if not runs %}disabled{% endif %}></th><th>批次</th><th>截止日</th><th>状态</th><th>创建账号</th><th>创建时间</th><th>操作</th></tr></thead>
     <tbody>
       {% for run in runs %}
       <tr>
+        <td class="selection-cell"><input form="batch-run-form" type="checkbox" name="run_ids" value="{{ run.id }}" data-run-checkbox aria-label="选择批次 #{{ run.id }}"></td>
         <td>#{{ run.id }}</td>
         <td>{{ run.cutoff_date }}</td>
         <td><span class="status">{{ run.status }}</span></td>
@@ -25,9 +34,35 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="muted">还没有处理批次</td></tr>
+      <tr><td colspan="7" class="muted">还没有处理批次</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+<script>
+  const batchForm = document.getElementById("batch-run-form");
+  const selectAllRuns = document.getElementById("select-all-runs");
+  const batchToolbar = document.getElementById("batch-toolbar");
+  const selectedRunCount = document.getElementById("selected-run-count");
+  const runCheckboxes = Array.from(document.querySelectorAll("[data-run-checkbox]"));
+
+  function updateBatchSelection() {
+    const selectedCount = runCheckboxes.filter((checkbox) => checkbox.checked).length;
+    batchToolbar.hidden = selectedCount === 0;
+    selectedRunCount.textContent = `已选 ${selectedCount} 条`;
+    selectAllRuns.checked = selectedCount === runCheckboxes.length && selectedCount > 0;
+    selectAllRuns.indeterminate = selectedCount > 0 && selectedCount < runCheckboxes.length;
+  }
+
+  selectAllRuns.addEventListener("change", () => {
+    runCheckboxes.forEach((checkbox) => { checkbox.checked = selectAllRuns.checked; });
+    updateBatchSelection();
+  });
+  runCheckboxes.forEach((checkbox) => checkbox.addEventListener("change", updateBatchSelection));
+  batchForm.addEventListener("submit", (event) => {
+    if (event.submitter.value === "delete" && !confirm("确定永久删除所选批次及其上传文件和结果文件吗？")) {
+      event.preventDefault();
+    }
+  });
+</script>
 {% endblock %}
