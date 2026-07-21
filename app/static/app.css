@@ -146,6 +146,8 @@ td:last-child, th:last-child { white-space: nowrap; }
   font-weight: 700;
 }
 
+.batch-toolbar[hidden] { display: none; }
+
 .batch-toolbar .button { padding: 7px 10px; border-radius: 4px; background: #e4eaec; color: #2a444f; }
 
 .inline-form { display: inline; }

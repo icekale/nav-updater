@@ -313,6 +313,7 @@ def test_history_page_renders_batch_controls_for_visible_runs(tmp_path: Path) ->
     assert 'name="action" value="delete"' in response.text
     assert "确定永久删除所选批次及其上传文件和结果文件吗？" in response.text
     assert ".batch-toolbar" in stylesheet.text
+    assert ".batch-toolbar[hidden] { display: none; }" in stylesheet.text
 
 
 def test_deleting_completed_run_removes_artifacts_and_old_audit_logs(
