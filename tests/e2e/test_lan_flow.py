@@ -407,6 +407,38 @@ def test_preview_counts_values_and_confirmed_source_blanks(tmp_path: Path) -> No
     assert "可直接生成 1 条" in preview.text
 
 
+def test_workspace_pages_render_sidebar_and_safe_delete_controls(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        session = factory()
+        try:
+            operator = User(username="operator", password_hash="hash", role="user")
+            session.add(operator)
+            session.commit()
+            operator_id = operator.id
+        finally:
+            session.close()
+
+        updates = client.get("/updates")
+        users = client.get("/admin/users")
+        stylesheet = client.get("/static/app.css")
+
+    assert 'class="app-shell"' in updates.text
+    assert 'class="app-sidebar"' in updates.text
+    assert 'class="app-main"' in updates.text
+    assert 'class="nav-link is-active" href="/updates" aria-current="page"' in updates.text
+    assert f'action="/updates/{run_id}/delete"' in updates.text
+    assert "确定永久删除此批次及其上传文件和结果文件吗？" in updates.text
+    assert "创建账号" in updates.text
+    assert f'action="/admin/users/{operator_id}/delete"' in users.text
+    assert "当前登录账号，不能删除" in users.text
+    assert ".app-sidebar" in stylesheet.text
+    assert "width: 232px" in stylesheet.text
+    assert "@media (max-width: 799px)" in stylesheet.text
+
+
 def test_login_catalog_upload_and_queue_run(tmp_path: Path) -> None:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",

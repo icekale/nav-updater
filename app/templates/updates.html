@@ -1,7 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">WORKSPACE</p><h1>更新历史</h1></div><a class="primary button" href="/updates/new">新建更新</a></div>
-<table><thead><tr><th>批次</th><th>截止日</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody>
-{% for run in runs %}<tr><td>#{{ run.id }}</td><td>{{ run.cutoff_date }}</td><td><span class="status">{{ run.status }}</span></td><td>{{ run.created_at }}</td><td><a href="/updates/{{ run.id }}/preview">查看</a></td></tr>{% else %}<tr><td colspan="5" class="muted">还没有处理批次</td></tr>{% endfor %}
-</tbody></table>
+<div class="page-heading">
+  <div><p class="eyebrow">WORKSPACE</p><h1>更新历史</h1></div>
+  <a class="primary button" href="/updates/new">新建更新</a>
+</div>
+{% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>批次</th><th>截止日</th><th>状态</th><th>创建账号</th><th>创建时间</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>#{{ run.id }}</td>
+        <td>{{ run.cutoff_date }}</td>
+        <td><span class="status">{{ run.status }}</span></td>
+        <td>{{ run.operator.username if run.operator else '已删除账号' }}</td>
+        <td>{{ run.created_at }}</td>
+        <td class="table-actions">
+          <a class="text-action" href="/updates/{{ run.id }}/preview">查看</a>
+          <form method="post" action="/updates/{{ run.id }}/delete" class="inline-form" onsubmit="return confirm('确定永久删除此批次及其上传文件和结果文件吗？')">
+            <input type="hidden" name="token" value="{{ csrf_token }}">
+            <button type="submit" class="danger-button">删除</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">还没有处理批次</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

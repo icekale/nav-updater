@@ -1,6 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-heading"><div><p class="eyebrow">ADMIN</p><h1>账号管理</h1></div></div>
-<form class="form-panel compact" method="post" action="/admin/users"><input type="hidden" name="token" value="{{ csrf_token }}"><label>账号<input name="username" required></label><label>初始密码<input name="password" type="password" minlength="8" required></label><label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label><button class="primary" type="submit">创建账号</button></form>
-<table><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th></tr></thead><tbody>{% for item in users %}<tr><td>{{ item.username }}</td><td>{{ item.role }}</td><td>{{ '启用' if item.is_active else '停用' }}</td><td>{{ item.created_at }}</td></tr>{% endfor %}</tbody></table>
+{% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+<form class="form-panel compact" method="post" action="/admin/users">
+  <input type="hidden" name="token" value="{{ csrf_token }}">
+  <label>账号<input name="username" required></label>
+  <label>初始密码<input name="password" type="password" minlength="8" required></label>
+  <label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+  <button class="primary" type="submit">创建账号</button>
+</form>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for item in users %}
+      <tr>
+        <td>{{ item.username }}</td>
+        <td>{{ item.role }}</td>
+        <td>{{ '启用' if item.is_active else '停用' }}</td>
+        <td>{{ item.created_at }}</td>
+        <td>
+          {% if item.id == user.id %}<span class="muted">当前登录账号，不能删除</span>
+          {% elif item.role == 'admin' and admin_count == 1 %}<span class="muted">最后一个管理员，不能删除</span>
+          {% else %}
+          <form method="post" action="/admin/users/{{ item.id }}/delete" class="inline-form" onsubmit="return confirm('确定永久删除账号 {{ item.username }} 吗？历史批次会保留。')">
+            <input type="hidden" name="token" value="{{ csrf_token }}">
+            <button type="submit" class="danger-button">删除</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

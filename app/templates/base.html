@@ -7,22 +7,31 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="/updates">投研净值更新工具</a>
-    {% if user %}
-    <nav>
-      <a href="/updates">更新历史</a>
-      <a href="/updates/new">新建更新</a>
-      <a href="/meetings">会议跟踪</a>
-      <a href="/catalog">产品目录</a>
-      {% if user.role == 'admin' %}<a href="/admin/users">账号</a>{% endif %}
-      <form method="post" action="/logout" class="inline-form">
-        <input type="hidden" name="token" value="{{ csrf_token }}">
-        <button type="submit" class="link-button">退出</button>
-      </form>
-    </nav>
-    {% endif %}
-  </header>
-  <main class="container">{% block content %}{% endblock %}</main>
+  {% if user %}
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <a class="sidebar-brand" href="/updates">投研净值更新工具</a>
+      <nav class="sidebar-nav" aria-label="主导航">
+        <a class="nav-link{% if request.url.path == '/updates' %} is-active{% endif %}" href="/updates"{% if request.url.path == '/updates' %} aria-current="page"{% endif %}>更新历史</a>
+        <a class="nav-link{% if request.url.path == '/updates/new' %} is-active{% endif %}" href="/updates/new"{% if request.url.path == '/updates/new' %} aria-current="page"{% endif %}>新建更新</a>
+        <a class="nav-link{% if request.url.path.startswith('/meetings') %} is-active{% endif %}" href="/meetings"{% if request.url.path.startswith('/meetings') %} aria-current="page"{% endif %}>会议跟踪</a>
+        <a class="nav-link{% if request.url.path.startswith('/catalog') %} is-active{% endif %}" href="/catalog"{% if request.url.path.startswith('/catalog') %} aria-current="page"{% endif %}>产品目录</a>
+        {% if user.role == 'admin' %}<a class="nav-link{% if request.url.path.startswith('/admin/users') %} is-active{% endif %}" href="/admin/users"{% if request.url.path.startswith('/admin/users') %} aria-current="page"{% endif %}>账号管理</a>{% endif %}
+      </nav>
+      <div class="sidebar-footer">
+        <span class="sidebar-user">{{ user.username }}</span>
+        <form method="post" action="/logout" class="inline-form">
+          <input type="hidden" name="token" value="{{ csrf_token }}">
+          <button type="submit" class="sidebar-logout">退出</button>
+        </form>
+      </div>
+    </aside>
+    <main class="app-main">
+  {% else %}
+    <main class="auth-main">
+  {% endif %}
+      <div class="container">{% block content %}{% endblock %}</div>
+    </main>
+  {% if user %}</div>{% endif %}
 </body>
 </html>

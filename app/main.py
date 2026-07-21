@@ -201,6 +201,7 @@ def create_app(
     @app.get("/updates", response_class=HTMLResponse)
     def updates_page(
         request: Request,
+        notice: str = "",
         user: User = Depends(current_user),
         session: Session = Depends(get_session),
     ):
@@ -208,7 +209,12 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="updates.html",
-            context={"user": user, "runs": runs, "csrf_token": csrf_token(request)},
+            context={
+                "user": user,
+                "runs": runs,
+                "notice": notice,
+                "csrf_token": csrf_token(request),
+            },
         )
 
     @app.post("/updates/{run_id}/delete")
@@ -891,6 +897,7 @@ def create_app(
     @app.get("/admin/users", response_class=HTMLResponse)
     def admin_users_page(
         request: Request,
+        notice: str = "",
         user: User = Depends(require_admin),
         session: Session = Depends(get_session),
     ):
@@ -898,7 +905,13 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="admin_users.html",
-            context={"user": user, "users": users, "csrf_token": csrf_token(request)},
+            context={
+                "user": user,
+                "users": users,
+                "notice": notice,
+                "admin_count": sum(item.role == "admin" for item in users),
+                "csrf_token": csrf_token(request),
+            },
         )
 
     @app.post("/admin/users")
