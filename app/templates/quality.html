@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">OCR QUALITY · 最近 30 天</p>
+    <h1>质检中心</h1>
+    <p class="muted">基于人工审核确认的最新样本，定位高频漏识别和需关注产品。</p>
+  </div>
+</div>
+
+<section class="quality-kpis" aria-label="OCR 质量概览">
+  <article class="quality-kpi"><span>字段一致率</span><strong>{% if quality.field_accuracy is none %}—{% else %}{{ "%.1f"|format(quality.field_accuracy * 100) }}%{% endif %}</strong><small>仅统计人工确认字段</small></article>
+  <article class="quality-kpi"><span>待人工审核</span><strong>{{ quality.pending_review_count }}</strong><small>当前近 30 天批次</small></article>
+  <article class="quality-kpi"><span>漏识别</span><strong>{{ quality.missing_count }}</strong><small>人工有值、OCR 未提取</small></article>
+  <article class="quality-kpi"><span>已确认空值</span><strong>{{ quality.source_blank_count }}</strong><small>自动留空，仅作观察</small></article>
+  <article class="quality-kpi"><span>产品已改正</span><strong>{{ quality.product_corrected_count }}</strong><small>另有 {{ quality.product_unmatched_count }} 条未匹配</small></article>
+</section>
+
+<section class="quality-section">
+  <div class="section-heading"><div><p class="eyebrow">FIELD ISSUES</p><h2>高频问题字段</h2></div><p class="muted">按人工确认后的最新审核版本汇总</p></div>
+  {% if quality.fields %}
+  <div class="table-wrap"><table class="quality-table"><thead><tr><th>指标</th><th>确认样本</th><th>一致率</th><th>漏识别</th><th>值不一致</th></tr></thead><tbody>
+  {% for field in quality.fields %}<tr><td>{{ field.label }}</td><td>{{ field.confirmed_count }}</td><td>{% if field.accuracy is none %}—{% else %}{{ "%.1f"|format(field.accuracy * 100) }}%{% endif %}</td><td>{{ field.missing_count }}</td><td>{{ field.incorrect_count }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">暂未积累人工确认样本。</p>{% endif %}
+</section>
+
+<section class="quality-section">
+  <div class="section-heading"><div><p class="eyebrow">PRODUCT WATCH</p><h2>需关注产品</h2></div><p class="muted">产品匹配：{{ quality.product_matched_count }} 条一致 · {{ quality.product_corrected_count }} 条改正</p></div>
+  {% if quality.products %}
+  <div class="table-wrap"><table class="quality-table"><thead><tr><th>产品</th><th>确认样本</th><th>一致率</th><th>漏识别</th><th>值不一致</th></tr></thead><tbody>
+  {% for product in quality.products %}<tr><td>{{ product.label }}</td><td>{{ product.confirmed_count }}</td><td>{% if product.accuracy is none %}—{% else %}{{ "%.1f"|format(product.accuracy * 100) }}%{% endif %}</td><td>{{ product.missing_count }}</td><td>{{ product.incorrect_count }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">暂未积累人工确认样本。</p>{% endif %}
+</section>
+
+<section class="quality-section">
+  <div class="section-heading"><div><p class="eyebrow">RECENT ISSUES</p><h2>最近问题</h2></div></div>
+  {% if quality.recent_issues %}
+  <div class="table-wrap"><table class="quality-table"><thead><tr><th>产品</th><th>问题指标</th><th>结果</th><th>审核时间</th><th>操作</th></tr></thead><tbody>
+  {% for issue in quality.recent_issues %}<tr><td>{{ issue.product_name }}</td><td>{{ issue.metric_label }}</td><td><span class="status status-needs_review">{{ issue.outcome }}</span></td><td>{{ issue.reviewed_at.strftime("%Y-%m-%d %H:%M") }}</td><td><a class="link-button dark" href="/updates/{{ issue.run_id }}/review#review-item-{{ issue.run_item_id }}">去审核</a></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="muted">暂无需要处理的问题。</p>{% endif %}
+</section>
+{% endblock %}

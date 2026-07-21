@@ -488,6 +488,52 @@ def test_review_sample_is_atomic_when_sample_write_fails(tmp_path: Path) -> None
         session.close()
 
 
+def test_quality_center_renders_metrics_and_review_links(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        session = factory()
+        try:
+            product = Product(
+                product_name="质检产品", product_code="QUALITY-001", product_type="private"
+            )
+            session.add(product)
+            session.flush()
+            item = session.get(RunItem, item_id)
+            assert item is not None
+            item.row_status = "needs_review"
+            item.metric_status = {"mtd": "source_blank"}
+            session.add(
+                OcrReviewSample(
+                    run_id=run_id,
+                    run_item_id=item_id,
+                    product_id=product.id,
+                    excel_product_name="质检产品",
+                    review_version=1,
+                    ocr_match_source="image",
+                    ocr_product_id=product.id,
+                    ocr_metric_values={},
+                    ocr_metric_status={"weekly": "stale"},
+                    confirmed_metric_values={"weekly": "0.01"},
+                    confirmed_metric_status={"weekly": "manual"},
+                    review_note="人工确认",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        response = client.get("/quality")
+
+    assert response.status_code == 200
+    assert "质检中心" in response.text
+    assert "字段一致率" in response.text
+    assert "漏识别" in response.text
+    assert "source_blank" not in response.text
+    assert f'/updates/{run_id}/review#review-item-{item_id}' in response.text
+
+
 def test_history_page_renders_batch_controls_for_visible_runs(tmp_path: Path) -> None:
     app, factory = _test_app(tmp_path)
     with TestClient(app) as client:

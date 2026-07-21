@@ -55,6 +55,7 @@ from .jobs.service import (
 )
 from .meetings import MeetingImportError, import_meetings
 from .models import AuditLog, Meeting, Product, UpdateRun, User
+from .quality import build_quality_dashboard
 
 ATTENDANCE_OPTIONS = (
     ("unplanned", "未安排"),
@@ -220,6 +221,22 @@ def create_app(
                 "user": user,
                 "runs": runs,
                 "notice": notice,
+                "csrf_token": csrf_token(request),
+            },
+        )
+
+    @app.get("/quality", response_class=HTMLResponse)
+    def quality_page(
+        request: Request,
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        return templates.TemplateResponse(
+            request=request,
+            name="quality.html",
+            context={
+                "user": user,
+                "quality": build_quality_dashboard(session),
                 "csrf_token": csrf_token(request),
             },
         )
