@@ -42,7 +42,9 @@ from .jobs.review import (
     save_manual_review,
 )
 from .jobs.service import (
+    BatchRunResult,
     RunDeletionConflict,
+    batch_manage_runs,
     create_run,
     delete_run,
     lock_run_item,
@@ -216,6 +218,42 @@ def create_app(
                 "csrf_token": csrf_token(request),
             },
         )
+
+    def batch_notice(result: BatchRunResult) -> str:
+        messages = []
+        if result.requeued:
+            messages.append(f"已重新生成 {result.requeued} 个批次")
+        if result.deleted:
+            messages.append(f"已删除 {result.deleted} 个批次")
+        if result.skipped_processing:
+            messages.append(f"跳过处理中 {result.skipped_processing} 个")
+        if result.missing:
+            messages.append(f"不存在 {result.missing} 个")
+        return "，".join(messages)
+
+    @app.post("/updates/batch")
+    def batch_update_runs(
+        request: Request,
+        token: str = Form(...),
+        action: str = Form(...),
+        run_ids: list[int] = Form(default=[]),
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        if not run_ids:
+            return RedirectResponse("/updates?notice=请选择至少一个批次", status_code=303)
+        if action not in {"requeue", "delete"}:
+            return RedirectResponse("/updates?notice=批量操作无效", status_code=303)
+        result = batch_manage_runs(
+            session,
+            run_ids,
+            action=action,
+            data_dir=ensure_data_dir(app.state.settings),
+            actor_id=user.id,
+        )
+        notice = urlencode({"notice": batch_notice(result)})
+        return RedirectResponse(f"/updates?{notice}", status_code=303)
 
     @app.post("/updates/{run_id}/delete")
     def delete_update(

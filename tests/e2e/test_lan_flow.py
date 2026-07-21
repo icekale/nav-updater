@@ -126,11 +126,12 @@ def _create_run_with_artifacts(
     data_dir: Path,
     *,
     status: str = "completed",
+    directory: str = "run-artifacts",
 ) -> tuple[int, int, Path, Path]:
     session = factory()
     try:
         admin = session.query(User).filter_by(username="admin").one()
-        run_dir = data_dir / "runs" / "run-artifacts"
+        run_dir = data_dir / "runs" / directory
         run_dir.mkdir(parents=True)
         workbook = run_dir / "input.xlsx"
         image = run_dir / "source.png"
@@ -189,6 +190,35 @@ def _create_run_with_artifacts(
         )
         session.commit()
         return run.id, item.id, run_dir, result
+    finally:
+        session.close()
+
+
+def test_batch_requeue_moves_each_completed_run_back_to_the_queue(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        first_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path, directory="batch-a")
+        second_id, _, _, _ = _create_run_with_artifacts(factory, tmp_path, directory="batch-b")
+
+        response = client.post(
+            "/updates/batch",
+            data={
+                "token": _token(client, "/updates"),
+                "action": "requeue",
+                "run_ids": [str(first_id), str(second_id)],
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    session = factory()
+    try:
+        assert session.get(UpdateRun, first_id).status == "uploaded"
+        assert session.get(UpdateRun, second_id).status == "uploaded"
+        assert (
+            session.query(AuditLog).filter_by(action="queue", object_type="update_run").count() == 2
+        )
     finally:
         session.close()
 

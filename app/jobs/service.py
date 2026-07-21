@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -25,6 +25,14 @@ RUN_FAILED = "failed"
 
 class RunDeletionConflict(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class BatchRunResult:
+    requeued: int = 0
+    deleted: int = 0
+    skipped_processing: int = 0
+    missing: int = 0
 
 
 def utcnow() -> datetime:
@@ -142,6 +150,41 @@ def requeue_run(session: Session, run_id: int) -> UpdateRun | None:
         return None
     session.commit()
     return session.get(UpdateRun, run_id)
+
+
+def batch_manage_runs(
+    session: Session,
+    run_ids: Iterable[int],
+    *,
+    action: str,
+    data_dir: Path,
+    actor_id: int,
+) -> BatchRunResult:
+    result = BatchRunResult()
+    for run_id in dict.fromkeys(run_ids):
+        run = session.get(UpdateRun, run_id)
+        if run is None:
+            result = replace(result, missing=result.missing + 1)
+        elif run.status == RUN_PROCESSING:
+            result = replace(result, skipped_processing=result.skipped_processing + 1)
+        elif action == "requeue":
+            requeue_run(session, run_id)
+            session.add(
+                AuditLog(
+                    actor_id=actor_id,
+                    action="queue",
+                    object_type="update_run",
+                    object_id=str(run_id),
+                )
+            )
+            session.commit()
+            result = replace(result, requeued=result.requeued + 1)
+        elif action == "delete":
+            delete_run(session, run_id, data_dir=data_dir, actor_id=actor_id)
+            result = replace(result, deleted=result.deleted + 1)
+        else:
+            raise ValueError("unsupported batch action")
+    return result
 
 
 def delete_run(
