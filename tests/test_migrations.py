@@ -38,6 +38,9 @@ class _PostgresOperations:
     def get_bind(self):
         return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
 
+    def execute(self, statement) -> None:
+        self.calls.append(("execute", str(statement)))
+
     def batch_alter_table(self, *args, **kwargs) -> _BatchOperations:
         return _BatchOperations(self.calls)
 
@@ -72,3 +75,16 @@ def test_deleted_user_history_migration_uses_existing_postgres_constraint_names(
 
     assert ("drop", "update_runs_operator_id_fkey", "update_runs", "foreignkey") in operations.calls
     assert ("drop", "audit_logs_actor_id_fkey", "audit_logs", "foreignkey") in operations.calls
+
+
+def test_china_time_migration_shifts_existing_postgres_timestamps(monkeypatch) -> None:
+    migration = importlib.import_module("migrations.versions.0005_correct_china_times")
+    operations = _PostgresOperations()
+    monkeypatch.setattr(migration, "op", operations)
+
+    migration.upgrade()
+
+    statements = "\n".join(str(call) for call in operations.calls)
+    assert "update_runs" in statements
+    assert "created_at = created_at + INTERVAL '8 hours'" in statements
+    assert "ocr_review_samples" in statements

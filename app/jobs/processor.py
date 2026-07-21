@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, Update
 from ..ocr.engine import OCRRecognizer, create_ocr_service
 from ..ocr.table_parser import OCRMetricRow, extract_metric_rows
 from ..providers.public_fund import PublicFundProvider
+from ..time import china_now as utcnow
 from .review import METRIC_FIELDS
 from .service import (
     RUN_PROCESSING,
@@ -46,10 +46,6 @@ ALL_METRICS = (
 )
 PARTIAL_MINIMUM_CONFIRMED_FIELDS = 9
 METRIC_LABELS = {field.name: field.label for field in METRIC_FIELDS}
-
-
-def utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _product_records(products: Iterable[Product]) -> list[CatalogRecord]:
