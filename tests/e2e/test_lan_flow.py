@@ -73,6 +73,20 @@ def test_login_page_is_available() -> None:
     assert "登录" in response.text
 
 
+def test_user_history_foreign_keys_use_set_null() -> None:
+    assert next(
+        foreign_key.ondelete
+        for foreign_key in UpdateRun.__table__.foreign_keys
+        if foreign_key.parent.name == "operator_id"
+    ) == "SET NULL"
+    assert next(
+        foreign_key.ondelete
+        for foreign_key in AuditLog.__table__.foreign_keys
+        if foreign_key.parent.name == "actor_id"
+    ) == "SET NULL"
+    assert UpdateRun.__table__.c.operator_id.nullable is True
+
+
 def test_login_catalog_upload_and_queue_run(tmp_path: Path) -> None:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",

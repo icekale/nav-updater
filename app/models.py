@@ -58,7 +58,9 @@ class UpdateRun(Base):
     __tablename__ = "update_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     cutoff_date: Mapped[date] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(40), default="uploaded", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -108,7 +110,9 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     action: Mapped[str] = mapped_column(String(80))
     object_type: Mapped[str] = mapped_column(String(80))
     object_id: Mapped[str] = mapped_column(String(100))
