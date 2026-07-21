@@ -33,7 +33,7 @@ from .catalog import (
 from .config import Settings, ensure_data_dir, get_settings
 from .db import SessionLocal, get_session
 from .domain.matching import parse_catalog_csv
-from .jobs.processor import ALL_METRICS
+from .jobs.processor import ALL_METRICS, METRIC_LABELS
 from .jobs.review import (
     METRIC_FIELDS,
     ManualReviewError,
@@ -89,6 +89,33 @@ def _parse_filter_date(value: str) -> date | None:
         return date.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _localized_metric_reason(reason: str | None) -> str | None:
+    if not reason:
+        return reason
+    localized = reason
+    for metric, label in METRIC_LABELS.items():
+        localized = localized.replace(metric, label)
+    return localized
+
+
+def _preview_row(item) -> dict[str, object]:
+    value_count = sum(
+        value is not None
+        for metric, value in item.metric_values.items()
+        if metric in METRIC_LABELS
+    )
+    source_blank_count = sum(
+        item.metric_status.get(metric) == "source_blank" for metric in METRIC_LABELS
+    )
+    return {
+        "item": item,
+        "value_count": value_count,
+        "source_blank_count": source_blank_count,
+        "confirmed_count": value_count + source_blank_count,
+        "error_reason": _localized_metric_reason(item.error_reason),
+    }
 
 
 def create_app(
@@ -507,6 +534,7 @@ def create_app(
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
         items = list(run.items)
+        preview_items = [_preview_row(item) for item in items]
         review_count = sum(item.row_status in REVIEWABLE_STATUSES for item in items)
         return templates.TemplateResponse(
             request=request,
@@ -515,6 +543,7 @@ def create_app(
                 "user": user,
                 "run": run,
                 "items": items,
+                "preview_items": preview_items,
                 "csrf_token": csrf_token(request),
                 "item_status_labels": ITEM_STATUS_LABELS,
                 "match_source_labels": MATCH_SOURCE_LABELS,

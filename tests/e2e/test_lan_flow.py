@@ -349,6 +349,64 @@ def test_admin_cannot_delete_self_or_the_last_admin(tmp_path: Path) -> None:
         session.close()
 
 
+def test_preview_counts_values_and_confirmed_source_blanks(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            run = UpdateRun(
+                operator_id=admin.id,
+                cutoff_date=date(2026, 7, 17),
+                status="completed",
+            )
+            session.add(run)
+            session.flush()
+            extracted_metrics = {
+                "weekly",
+                "mtd",
+                "ytd",
+                "annual_2019",
+                "annual_2020",
+                "annual_2021",
+                "annual_2022",
+                "annual_2024",
+            }
+            statuses = {metric: "extracted" for metric in extracted_metrics}
+            statuses.update(
+                {
+                    "annual_2023": "stale",
+                    "annual_2025": "source_blank",
+                    "sharpe": "source_blank",
+                    "max_drawdown": "source_blank",
+                }
+            )
+            session.add(
+                RunItem(
+                    run_id=run.id,
+                    excel_row=2,
+                    row_status="partial",
+                    metric_values={metric: "0.01" for metric in extracted_metrics},
+                    metric_status=statuses,
+                    error_reason="本次未识别：annual_2023；OCR 置信度较低",
+                    original_values={"product_name": "浑瑾产品"},
+                )
+            )
+            session.commit()
+            run_id = run.id
+        finally:
+            session.close()
+
+        preview = client.get(f"/updates/{run_id}/preview")
+
+    assert "已确认 11 / 12 项（8 数值＋3 空值）" in preview.text
+    assert "2023（%）" in preview.text
+    assert "annual_2023" not in preview.text
+    assert "待人工审核 0 条" in preview.text
+    assert "可直接生成 1 条" in preview.text
+
+
 def test_login_catalog_upload_and_queue_run(tmp_path: Path) -> None:
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -687,8 +745,8 @@ def test_review_creates_private_product_and_hides_ready_items(tmp_path: Path) ->
         preview = client.get(f"/updates/{run_id}/preview")
         assert "识别结果" in preview.text
         assert "待人工审核 1 条" in preview.text
-        assert "已识别 1 / 12 项" in preview.text
-        assert "已识别 9 / 12 项" in preview.text
+        assert "已确认 1 / 12 项（1 数值＋0 空值）" in preview.text
+        assert "已确认 9 / 12 项（9 数值＋0 空值）" in preview.text
         assert "部分识别" in preview.text
         assert "本次未识别" in preview.text
         assert "去审核" in preview.text

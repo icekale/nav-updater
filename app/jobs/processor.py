@@ -22,6 +22,7 @@ from ..models import AuditLog, NavObservation, Product, RunFile, RunItem, Update
 from ..ocr.engine import OCRRecognizer, create_ocr_service
 from ..ocr.table_parser import OCRMetricRow, extract_metric_rows
 from ..providers.public_fund import PublicFundProvider
+from .review import METRIC_FIELDS
 from .service import (
     RUN_PROCESSING,
     fail_run,
@@ -44,6 +45,7 @@ ALL_METRICS = (
     "max_drawdown",
 )
 PARTIAL_MINIMUM_CONFIRMED_FIELDS = 9
+METRIC_LABELS = {field.name: field.label for field in METRIC_FIELDS}
 
 
 def utcnow() -> datetime:
@@ -192,12 +194,14 @@ def _image_row_status(
     row: OCRMetricRow, missing_metrics: set[str]
 ) -> tuple[str, str | None]:
     confirmed_count = len(ALL_METRICS) - len(missing_metrics)
-    if row.confidence < 0.85:
-        return "needs_review", "OCR confidence below threshold"
     if not missing_metrics:
-        return "ready", None
-    message = f"本次未识别：{', '.join(sorted(missing_metrics))}"
+        return "ready", "OCR 置信度较低" if row.confidence < 0.85 else None
+    message = "本次未识别：" + ", ".join(
+        METRIC_LABELS[metric] for metric in ALL_METRICS if metric in missing_metrics
+    )
     if confirmed_count >= PARTIAL_MINIMUM_CONFIRMED_FIELDS:
+        if row.confidence < 0.85:
+            message += "；OCR 置信度较低"
         return "partial", message
     return "needs_review", message
 

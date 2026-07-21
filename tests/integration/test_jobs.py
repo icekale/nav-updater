@@ -495,9 +495,25 @@ def test_image_row_status_routes_low_coverage_rows_to_manual_review() -> None:
     assert _image_row_status(row, missing_metrics) == (
         "needs_review",
         (
-            "本次未识别：annual_2019, annual_2020, annual_2021, annual_2022, annual_2023, "
-            "annual_2024, annual_2025, max_drawdown, mtd, sharpe, ytd"
+            "本次未识别：MTD（%）, YTD（%）, 2019（%）, 2020（%）, 2021（%）, 2022（%）, "
+            "2023（%）, 2024（%）, 2025（%）, 近一年夏普比, 近一年最大回撤（%）"
         ),
+    )
+
+
+def test_image_row_status_keeps_high_coverage_low_confidence_rows_nonblocking() -> None:
+    metrics = {metric: Decimal("0.01") for metric in ALL_METRICS[:9]}
+    row = OCRMetricRow(
+        product_name="产品A",
+        product_code=None,
+        metrics=metrics,
+        confidence=0.40,
+    )
+    missing_metrics = {"annual_2025", "sharpe", "max_drawdown"}
+
+    assert _image_row_status(row, missing_metrics) == (
+        "partial",
+        "本次未识别：2025（%）, 近一年夏普比, 近一年最大回撤（%）；OCR 置信度较低",
     )
 
 
