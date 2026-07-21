@@ -1,11 +1,13 @@
 from datetime import date, datetime
+from io import BytesIO
 
+from openpyxl import load_workbook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
 from app.models import Product, RunItem, UpdateRun
-from app.monitoring import build_monitoring_dashboard
+from app.monitoring import build_monitoring_dashboard, monitoring_workbook_bytes
 
 
 def _completed_item(
@@ -166,3 +168,37 @@ def test_monitoring_filters_rows_and_exceptions_but_keeps_summary_counts() -> No
     assert filtered.missing_data_count == 1
     assert {row.status for row in normal_only.rows} == {"normal"}
     assert not normal_only.exceptions
+
+
+def test_monitoring_workbook_uses_chinese_headers_and_current_rows() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    product = Product(product_name="导出产品", product_code="P001", product_type="private")
+    session.add(product)
+    session.flush()
+    _completed_item(
+        session,
+        product=product,
+        cutoff_date=date(2026, 7, 20),
+        created_at=datetime(2026, 7, 20, 9, 30),
+        metric_values={"weekly": "0.0123", "sharpe": "1.5", "max_drawdown": "-0.1"},
+    )
+    session.commit()
+    dashboard = build_monitoring_dashboard(session, today=date(2026, 7, 21))
+
+    workbook = load_workbook(BytesIO(monitoring_workbook_bytes(dashboard.rows)), data_only=True)
+    sheet = workbook.active
+
+    assert [cell.value for cell in sheet[1]][:6] == [
+        "产品代码",
+        "产品名称",
+        "数据状态",
+        "异常说明",
+        "最近净值截止日",
+        "最近处理时间",
+    ]
+    assert sheet.max_row == len(dashboard.rows) + 1
+    assert sheet[2][0].value == dashboard.rows[0].product_code
+    assert "近一周（%）" in [cell.value for cell in sheet[1]]
+    assert "近一年最大回撤（%）" in [cell.value for cell in sheet[1]]

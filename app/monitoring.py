@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -197,3 +200,55 @@ def build_monitoring_dashboard(
         missing_data_count=counts["missing_data"],
         outdated_count=counts["outdated"],
     )
+
+
+def _export_metric(value: Decimal | None, *, is_percent: bool) -> Decimal | None:
+    if value is None:
+        return None
+    return value * Decimal("100") if is_percent else value
+
+
+def monitoring_workbook_bytes(rows: Iterable[MonitoringRow]) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "私募产品监控"
+    headers = [
+        "产品代码",
+        "产品名称",
+        "数据状态",
+        "异常说明",
+        "最近净值截止日",
+        "最近处理时间",
+        *(field.label for field in METRIC_FIELDS),
+        "缺失指标",
+    ]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    sheet.freeze_panes = "A2"
+
+    for row in rows:
+        sheet.append(
+            [
+                row.product_code,
+                row.product_name,
+                row.status_label,
+                row.reason,
+                row.cutoff_date.isoformat() if row.cutoff_date else "",
+                row.processed_at.strftime("%Y-%m-%d %H:%M") if row.processed_at else "",
+                *[
+                    _export_metric(
+                        row.metric_values.get(field.name),
+                        is_percent=field.is_percent,
+                    )
+                    for field in METRIC_FIELDS
+                ],
+                "、".join(row.missing_metrics),
+            ]
+        )
+        for column, _ in enumerate(METRIC_FIELDS, start=7):
+            sheet.cell(row=sheet.max_row, column=column).number_format = "0.00"
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
