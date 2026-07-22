@@ -280,10 +280,22 @@ def _metric_cells_by_header(
     excluded: set[ParsedCell],
 ) -> dict[str, ParsedCell]:
     assigned: dict[str, ParsedCell] = {}
+    header_distances = {
+        key: min(
+            (abs(left - other_left) for other_key, other_left in headers if other_key != key),
+            default=None,
+        )
+        for key, left in headers
+    }
     for cell in cells:
         if cell in excluded:
             continue
         key, left = min(headers, key=lambda item: (abs(cell.left - item[1]), item[1]))
+        nearest_header_gap = header_distances.get(key)
+        if nearest_header_gap is not None and abs(cell.left - left) > max(
+            120.0, nearest_header_gap * 0.75
+        ):
+            continue
         if not _is_source_blank(cell.text):
             try:
                 _parse_metric_cell(key, cell.text)

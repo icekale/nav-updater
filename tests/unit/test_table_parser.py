@@ -347,3 +347,35 @@ def test_extract_metric_rows_recovers_split_risk_headers_and_ytd_column() -> Non
         "sharpe": Decimal("-0.52"),
         "max_drawdown": Decimal("-0.2128"),
     }
+
+
+def test_extract_metric_rows_does_not_assign_distant_historical_drawdown() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = extract_metric_rows(
+        [
+            token("近一年", 1400, 80),
+            token("近一年", 1600, 80),
+            token("历史", 1800, 80),
+            token("产品名称", 10, 100),
+            token("近一周(%)", 100, 100),
+            token("MTD(%)", 200, 100),
+            token("(%)1A", 400, 100),
+            token("2025(%)", 500, 100),
+            token("近一年夏普比", 1400, 100),
+            token("最大回撤(%)", 1600, 130),
+            token("最大回撤(%)", 1800, 130),
+            token("产品A", 10, 200),
+            token("5.20%", 100, 200),
+            token("0.50%", 200, 200),
+            token("2.68%", 300, 200),
+            token("16.83%", 500, 200),
+            token("1.25", 1400, 200),
+            token("-32.97%", 1800, 200),
+        ]
+    )
+
+    assert "max_drawdown" not in rows[0].metrics
