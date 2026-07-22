@@ -91,7 +91,7 @@ class OCRService:
         return _deduplicate_tokens(tokens)
 
     def recognize_tiled_dense(self, image: str | Path) -> list[OCRToken]:
-        return self.recognize_tiled(image, tile_height=800, overlap=192)
+        return self.recognize_tiled(image, tile_height=800, overlap=400)
 
 
 def create_ocr_service(settings: Settings | None = None) -> OCRRecognizer:

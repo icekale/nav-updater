@@ -54,6 +54,21 @@ def test_recognize_tiled_uses_smaller_default_tiles_for_dense_reports(monkeypatc
     assert tile_heights == [1600, 1600, 1600, 584]
 
 
+def test_recognize_tiled_dense_overlaps_rows_after_report_header(monkeypatch) -> None:
+    service = OCRService()
+    calls: list[tuple[int, int]] = []
+
+    def recognize_tiled(_image, *, tile_height: int, overlap: int):
+        calls.append((tile_height, overlap))
+        return []
+
+    monkeypatch.setattr(service, "recognize_tiled", recognize_tiled)
+
+    service.recognize_tiled_dense(np.zeros((1000, 20, 3), dtype=np.uint8))
+
+    assert calls == [(800, 400)]
+
+
 def test_detect_source_blank_tokens_keeps_an_isolated_dash() -> None:
     image = np.full((80, 200, 3), 255, dtype=np.uint8)
     cv2.line(image, (110, 42), (126, 42), (0, 0, 0), 2)
