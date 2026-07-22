@@ -27,6 +27,23 @@ def test_group_rows_sorts_cells_and_groups_y_coordinates() -> None:
     assert [[cell.text for cell in row.cells] for row in rows] == [["产品A", "5.20%"], ["产品B"]]
 
 
+def test_group_rows_keeps_a_slightly_raised_strategy_label_in_the_same_row() -> None:
+    def token(text: str, left: float, top: float) -> OCRToken:
+        return OCRToken(
+            text, ((left, top), (left + 50, top), (left + 50, top + 20), (left, top + 20)), 0.99
+        )
+
+    rows = group_rows(
+        [
+            token("成长", 100, 37),
+            token("产品A", 10, 50),
+            token("-7.75", 200, 50),
+        ]
+    )
+
+    assert [[cell.text for cell in row.cells] for row in rows] == [["产品A", "成长", "-7.75"]]
+
+
 def test_percent_and_number_parsing() -> None:
     assert parse_percent("(1.25%)") == Decimal("-0.0125")
     assert parse_percent("5.20%") == Decimal("0.052")

@@ -58,7 +58,19 @@ def group_rows(tokens: Iterable[OCRToken], y_tolerance: float = 12.0) -> list[Pa
     rows: list[list[OCRToken]] = []
     for token in sorted(tokens, key=lambda item: (item.center_y, item.left)):
         target = next(
-            (row for row in rows if abs(row[0].center_y - token.center_y) <= y_tolerance),
+            (
+                row
+                for row in rows
+                if abs(sum(item.center_y for item in row) / len(row) - token.center_y)
+                <= y_tolerance
+                or any(
+                    min(point[1] for point in item.box)
+                    < max(point[1] for point in token.box)
+                    and min(point[1] for point in token.box)
+                    < max(point[1] for point in item.box)
+                    for item in row
+                )
+            ),
             None,
         )
         if target is None:
