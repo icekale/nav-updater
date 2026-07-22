@@ -124,7 +124,7 @@ def _header_key(text: str) -> str | None:
         return "sharpe"
     if value.startswith("近一年") and "回撤" in value:
         return "max_drawdown"
-    if value in {"(%)1a", "(%)ia"}:
+    if value in {"(%)1a", "(%)ia", "(%)1"}:
         return "one_year_return"
     if value == "近一年":
         return "near_one_label"
