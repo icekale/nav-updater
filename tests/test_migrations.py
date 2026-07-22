@@ -155,3 +155,9 @@ def test_active_regression_migration_adds_and_removes_single_run_index(monkeypat
     operations.calls.clear()
     migration.downgrade()
     assert operations.calls == [("drop_index", "uq_ocr_regression_active_status")]
+
+
+def test_active_regression_migration_revision_fits_alembic_version_column() -> None:
+    migration = importlib.import_module("migrations.versions.0007_single_active_ocr_regression_run")
+
+    assert len(migration.revision) <= 32
