@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..domain.metrics import calculate_max_drawdown, calculate_returns, calculate_sharpe
 from ..domain.types import MetricStatus, NavPoint
 from ..excel.template_adapter import TemplateAdapter
-from ..models import AuditLog, RunFile, RunItem, UpdateRun
+from ..models import AuditLog, OcrRegressionSample, RunFile, RunItem, UpdateRun
 from ..time import china_now as utcnow
 
 RUN_READY = "uploaded"
@@ -245,6 +245,11 @@ def delete_run(
     item_count = len(run.items)
     file_count = sum(path.exists() for path in managed_paths)
     managed_directories = {path.parent for path in managed_paths if path.parent.parent == runs_root}
+    session.execute(
+        update(OcrRegressionSample)
+        .where(OcrRegressionSample.source_run_id == run.id)
+        .values(source_run_id=None, source_item_id=None)
+    )
     session.delete(run)
     session.commit()
     for path in managed_paths:

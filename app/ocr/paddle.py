@@ -46,6 +46,9 @@ class PaddleOCRService:
         job_id = self._submit(image_path)
         return tokens_from_markdown(self._wait_for_markdown(job_id))
 
+    def recognize_tiled_dense(self, image: str | Path) -> list[OCRToken]:
+        return self.recognize_tiled(image)
+
     def _submit(self, image_path: Path) -> str:
         try:
             with image_path.open("rb") as image:

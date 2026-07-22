@@ -9,7 +9,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .jobs.review import METRIC_FIELDS
-from .models import OcrReviewSample, Product, RunItem, UpdateRun
+from .models import (
+    OcrRegressionResult,
+    OcrRegressionRun,
+    OcrRegressionSample,
+    OcrReviewSample,
+    Product,
+    RunItem,
+    UpdateRun,
+)
 from .time import china_now
 
 REVIEWABLE_STATUSES = {"needs_review", "stale", "failed"}
@@ -37,6 +45,32 @@ class QualityIssue:
 
 
 @dataclass(frozen=True)
+class RegressionFailure:
+    run_id: int
+    sample_id: int
+    product_name: str
+    outcome: str
+    detail: str
+    expected: dict[str, object]
+    actual: dict[str, object]
+    source_run_id: int | None
+    source_item_id: int | None
+
+
+@dataclass(frozen=True)
+class RegressionSummary:
+    sample_count: int
+    latest_run_id: int | None
+    latest_status: str | None
+    latest_run_at: datetime | None
+    total_count: int
+    passed_count: int
+    failed_count: int
+    skipped_count: int
+    failures: tuple[RegressionFailure, ...]
+
+
+@dataclass(frozen=True)
 class QualityDashboard:
     field_accuracy: Decimal | None
     pending_review_count: int
@@ -48,6 +82,7 @@ class QualityDashboard:
     fields: tuple[QualityBreakdown, ...]
     products: tuple[QualityBreakdown, ...]
     recent_issues: tuple[QualityIssue, ...]
+    regression: RegressionSummary
 
 
 def _utcnow() -> datetime:
@@ -99,6 +134,69 @@ def _breakdowns(
             counts.items(),
             key=lambda item: (-item[1]["missing"], -item[1]["incorrect"], item[0][1]),
         )
+    )
+
+
+def _regression_summary(session: Session) -> RegressionSummary:
+    sample_count = session.scalar(
+        select(func.count())
+        .select_from(OcrRegressionSample)
+        .where(OcrRegressionSample.is_active.is_(True))
+    ) or 0
+    latest_run = session.scalar(
+        select(OcrRegressionRun).order_by(OcrRegressionRun.created_at.desc()).limit(1)
+    )
+    if latest_run is None:
+        return RegressionSummary(sample_count, None, None, None, 0, 0, 0, 0, ())
+    results = session.scalars(
+        select(OcrRegressionResult)
+        .where(OcrRegressionResult.run_id == latest_run.id)
+        .order_by(OcrRegressionResult.id)
+    ).all()
+    sample_ids = {result.sample_id for result in results}
+    samples_by_id = {
+        sample.id: sample
+        for sample in session.scalars(
+            select(OcrRegressionSample).where(OcrRegressionSample.id.in_(sample_ids))
+        ).all()
+    }
+    failures = tuple(
+        RegressionFailure(
+            run_id=latest_run.id,
+            sample_id=result.sample_id,
+            product_name=(
+                samples_by_id[result.sample_id].excel_product_name
+                if result.sample_id in samples_by_id
+                else "未知产品"
+            ),
+            outcome=result.outcome,
+            detail=result.detail,
+            expected=result.expected,
+            actual=result.actual,
+            source_run_id=(
+                samples_by_id[result.sample_id].source_run_id
+                if result.sample_id in samples_by_id
+                else None
+            ),
+            source_item_id=(
+                samples_by_id[result.sample_id].source_item_id
+                if result.sample_id in samples_by_id
+                else None
+            ),
+        )
+        for result in results
+        if result.outcome != "passed"
+    )
+    return RegressionSummary(
+        sample_count=sample_count,
+        latest_run_id=latest_run.id,
+        latest_status=latest_run.status,
+        latest_run_at=latest_run.finished_at or latest_run.created_at,
+        total_count=latest_run.total_count,
+        passed_count=latest_run.passed_count,
+        failed_count=latest_run.failed_count,
+        skipped_count=latest_run.skipped_count,
+        failures=failures[:10],
     )
 
 
@@ -197,4 +295,5 @@ def build_quality_dashboard(
         fields=fields,
         products=products,
         recent_issues=tuple(sorted(issues, key=lambda issue: issue.reviewed_at, reverse=True)[:10]),
+        regression=_regression_summary(session),
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 import shutil
 import uuid
 from collections.abc import Mapping
@@ -12,7 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -54,8 +55,20 @@ from .jobs.service import (
     resolve_item,
 )
 from .meetings import MeetingImportError, import_meetings
-from .models import AuditLog, Meeting, Product, UpdateRun, User
+from .models import (
+    AuditLog,
+    Meeting,
+    OcrRegressionRun,
+    OcrRegressionSample,
+    Product,
+    RunFile,
+    RunItem,
+    UpdateRun,
+    User,
+)
 from .monitoring import STATUS_LABELS, build_monitoring_dashboard, monitoring_workbook_bytes
+from .ocr.evidence import crop_box
+from .ocr.regression import import_confirmed_samples, promote_review_sample
 from .quality import build_quality_dashboard
 
 ATTENDANCE_OPTIONS = (
@@ -85,6 +98,21 @@ RUN_STATUS_LABELS = {
     "completed": "已完成",
     "completed_with_warnings": "已完成，待复核",
     "failed": "处理失败",
+}
+REGRESSION_STATUS_LABELS = {
+    "queued": "排队中",
+    "running": "运行中",
+    "completed": "已完成",
+    "failed": "运行失败",
+}
+REGRESSION_OUTCOME_LABELS = {
+    "passed": "通过",
+    "product_unmatched": "产品未匹配",
+    "value_missing": "数值缺失",
+    "value_mismatch": "值不一致",
+    "status_mismatch": "状态不一致",
+    "sample_file_invalid": "样本文件无效",
+    "execution_failed": "执行失败",
 }
 HISTORY_PAGE_SIZE = 50
 
@@ -229,6 +257,7 @@ def create_app(
     @app.get("/quality", response_class=HTMLResponse)
     def quality_page(
         request: Request,
+        notice: str = "",
         user: User = Depends(current_user),
         session: Session = Depends(get_session),
     ):
@@ -238,9 +267,170 @@ def create_app(
             context={
                 "user": user,
                 "quality": build_quality_dashboard(session),
+                "notice": notice,
+                "regression_samples": session.scalars(
+                    select(OcrRegressionSample)
+                    .order_by(OcrRegressionSample.created_at.desc())
+                    .limit(100)
+                ).all(),
+                "regression_status_labels": REGRESSION_STATUS_LABELS,
+                "regression_outcome_labels": REGRESSION_OUTCOME_LABELS,
                 "csrf_token": csrf_token(request),
             },
         )
+
+    @app.post("/quality/regression/run")
+    def queue_quality_regression(
+        request: Request,
+        token: str = Form(...),
+        admin: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        active = session.scalar(
+            select(OcrRegressionRun).where(OcrRegressionRun.status.in_(("queued", "running")))
+        )
+        if active is not None:
+            return RedirectResponse(
+                "/quality?notice=已有回归任务运行中",
+                status_code=303,
+            )
+        run = OcrRegressionRun(requested_by=admin.id, status="queued")
+        session.add(run)
+        session.flush()
+        session.add(
+            AuditLog(
+                actor_id=admin.id,
+                action="queue",
+                object_type="ocr_regression_run",
+                object_id=str(run.id),
+            )
+        )
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            return RedirectResponse(
+                "/quality?notice=已有回归任务运行中",
+                status_code=303,
+            )
+        return RedirectResponse("/quality?notice=已加入 OCR 回归队列", status_code=303)
+
+    @app.post("/quality/samples/import")
+    def import_quality_samples(
+        request: Request,
+        token: str = Form(...),
+        run_id: int = Form(...),
+        admin: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        if session.get(UpdateRun, run_id) is None:
+            return RedirectResponse("/quality?notice=来源批次不存在", status_code=303)
+        result = import_confirmed_samples(
+            session,
+            run_id=run_id,
+            samples_root=ensure_data_dir(app.state.settings) / "ocr-quality" / "samples",
+            actor_id=admin.id,
+        )
+        session.add(
+            AuditLog(
+                actor_id=admin.id,
+                action="import",
+                object_type="ocr_regression_sample",
+                object_id=str(run_id),
+                context={
+                    "created": result.created,
+                    "existing": result.existing,
+                    "skipped": result.skipped,
+                    "needs_image_choice": result.needs_image_choice,
+                },
+            )
+        )
+        session.commit()
+        notice = (
+            f"样本导入：新增 {result.created}，已存在 {result.existing}，"
+            f"跳过 {result.skipped}，待选择图片 {result.needs_image_choice}"
+        )
+        return RedirectResponse(f"/quality?{urlencode({'notice': notice})}", status_code=303)
+
+    @app.post("/quality/samples/promote")
+    def promote_quality_sample(
+        request: Request,
+        token: str = Form(...),
+        review_sample_id: int = Form(...),
+        source_file_id: int | None = Form(None),
+        admin: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        try:
+            promoted = promote_review_sample(
+                session,
+                sample_id=review_sample_id,
+                samples_root=ensure_data_dir(app.state.settings) / "ocr-quality" / "samples",
+                actor_id=admin.id,
+                source_file_id=source_file_id,
+            )
+        except ValueError as exc:
+            session.rollback()
+            return RedirectResponse(
+                f"/quality?{urlencode({'notice': f'提升失败：{exc}'})}", status_code=303
+            )
+        session.add(
+            AuditLog(
+                actor_id=admin.id,
+                action="promote",
+                object_type="ocr_review_sample",
+                object_id=str(review_sample_id),
+                context={"regression_sample_id": promoted.id, "source_file_id": source_file_id},
+            )
+        )
+        session.commit()
+        return RedirectResponse(
+            f"/quality?{urlencode({'notice': f'已提升审核样本 #{review_sample_id} 为回归样本'})}",
+            status_code=303,
+        )
+
+    @app.post("/quality/samples/{sample_id}/enable")
+    def toggle_quality_sample(
+        sample_id: int,
+        request: Request,
+        token: str = Form(...),
+        admin: User = Depends(require_admin),
+        session: Session = Depends(get_session),
+    ):
+        require_csrf(request, token)
+        sample = session.get(OcrRegressionSample, sample_id)
+        if sample is None:
+            return HTMLResponse("样本不存在", status_code=404)
+        sample.is_active = not sample.is_active
+        session.add(
+            AuditLog(
+                actor_id=admin.id,
+                action="enable" if sample.is_active else "disable",
+                object_type="ocr_regression_sample",
+                object_id=str(sample.id),
+            )
+        )
+        session.commit()
+        return RedirectResponse("/quality", status_code=303)
+
+    @app.get("/quality/samples/{sample_id}/image")
+    def quality_sample_image(
+        sample_id: int,
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        sample = session.get(OcrRegressionSample, sample_id)
+        if sample is None:
+            return HTMLResponse("样本不存在", status_code=404)
+        samples_root = (ensure_data_dir(app.state.settings) / "ocr-quality" / "samples").resolve()
+        image_path = Path(sample.image_path).resolve()
+        if not image_path.is_relative_to(samples_root) or not image_path.is_file():
+            return HTMLResponse("样本图片不存在", status_code=404)
+        media_type = mimetypes.guess_type(image_path.name)[0] or "application/octet-stream"
+        return FileResponse(image_path, media_type=media_type)
 
     @app.get("/monitoring", response_class=HTMLResponse)
     def monitoring_page(
@@ -727,6 +917,7 @@ def create_app(
                 "show_all": show_all,
                 "item_status_labels": ITEM_STATUS_LABELS,
                 "match_source_labels": MATCH_SOURCE_LABELS,
+                "metric_labels": METRIC_LABELS,
             },
             status_code=status_code,
         )
@@ -758,10 +949,16 @@ def create_app(
         if draft is not None:
             review_note = draft.get("review_note", "")
         missing_fields = tuple(
-            field for field in METRIC_FIELDS if field.name not in item.metric_values
+            field
+            for field in METRIC_FIELDS
+            if field.name not in item.metric_values
+            and item.metric_status.get(field.name) != "source_blank"
         )
         recognized_fields = tuple(
             field for field in METRIC_FIELDS if field.name in item.metric_values
+        )
+        source_blank_fields = tuple(
+            field for field in METRIC_FIELDS if item.metric_status.get(field.name) == "source_blank"
         )
         return {
             "item": item,
@@ -773,8 +970,12 @@ def create_app(
             "review_note": review_note,
             "missing_fields": missing_fields,
             "recognized_fields": recognized_fields,
+            "source_blank_fields": source_blank_fields,
             "missing_count": len(missing_fields),
             "recognized_count": len(recognized_fields),
+            "evidence": item.ocr_evidence.get("metrics", {})
+            if isinstance(item.ocr_evidence, dict)
+            else {},
         }
 
     @app.get("/updates/{run_id}/review", response_class=HTMLResponse)
@@ -789,6 +990,60 @@ def create_app(
         if run is None:
             return HTMLResponse("批次不存在", status_code=404)
         return review_response(request, run, session, user, show_all=show_all)
+
+    @app.get("/updates/{run_id}/items/{item_id}/evidence/{metric}")
+    def review_evidence_image(
+        run_id: int,
+        item_id: int,
+        metric: str,
+        user: User = Depends(current_user),
+        session: Session = Depends(get_session),
+    ):
+        item = session.scalar(
+            select(RunItem).where(RunItem.id == item_id, RunItem.run_id == run_id)
+        )
+        if item is None or metric not in METRIC_LABELS:
+            return HTMLResponse("证据不存在", status_code=404)
+        evidence = item.ocr_evidence if isinstance(item.ocr_evidence, dict) else {}
+        metric_evidence = evidence.get("metrics", {}).get(metric)
+        source_file_id = evidence.get("source_file_id")
+        if not isinstance(metric_evidence, dict) or not isinstance(source_file_id, int):
+            return HTMLResponse("证据不存在", status_code=404)
+        selected_pass = metric_evidence.get("selected_pass")
+        passes = metric_evidence.get("passes")
+        selected = next(
+            (entry for entry in passes or [] if entry.get("pass") == selected_pass),
+            None,
+        )
+        box = selected.get("box") if isinstance(selected, dict) else None
+        if not isinstance(box, list) or not box:
+            return HTMLResponse("证据不存在", status_code=404)
+        source = session.scalar(
+            select(RunFile).where(
+                RunFile.id == source_file_id,
+                RunFile.run_id == run_id,
+                RunFile.file_type == "image",
+            )
+        )
+        if source is None:
+            return HTMLResponse("证据不存在", status_code=404)
+        runs_root = (ensure_data_dir(app.state.settings) / "runs").resolve()
+        image_path = Path(source.storage_path).resolve()
+        if not image_path.is_relative_to(runs_root):
+            return HTMLResponse("证据不存在", status_code=404)
+        try:
+            coordinates = tuple(
+                (float(point[0]), float(point[1])) for point in box if len(point) >= 2
+            )
+            crop = crop_box(
+                image_path,
+                coordinates,
+                ensure_data_dir(app.state.settings) / "ocr-quality" / "crops",
+                image_sha256=source.sha256,
+            )
+        except (OSError, TypeError, ValueError, IndexError):
+            return HTMLResponse("证据不存在", status_code=404)
+        return FileResponse(crop, media_type="image/png")
 
     @app.post("/updates/{run_id}/items/{item_id}/review", response_class=HTMLResponse)
     async def save_review(

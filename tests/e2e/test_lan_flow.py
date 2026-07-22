@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
@@ -7,11 +7,13 @@ from urllib.parse import unquote
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from PIL import Image
 from sqlalchemy import create_engine, event
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.auth import hash_password
 from app.catalog import private_product_code
 from app.config import Settings
 from app.db import Base
@@ -20,6 +22,9 @@ from app.main import create_app
 from app.models import (
     AuditLog,
     Meeting,
+    OcrRegressionResult,
+    OcrRegressionRun,
+    OcrRegressionSample,
     OcrReviewSample,
     Product,
     RunFile,
@@ -234,6 +239,51 @@ def test_run_deletion_cascades_ocr_review_samples(tmp_path: Path) -> None:
             assert session.query(OcrReviewSample).count() == 0
         finally:
             session.close()
+
+
+def test_regression_sample_survives_run_delete(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        sample_path = tmp_path / "ocr-quality" / "samples" / "sample.png"
+        sample_path.parent.mkdir(parents=True)
+        sample_path.write_bytes(b"sample")
+        session = factory()
+        try:
+            session.add(
+                OcrRegressionSample(
+                    image_path=str(sample_path),
+                    image_sha256="a" * 64,
+                    source_run_id=run_id,
+                    source_item_id=item_id,
+                    source_label="管理员复核案例",
+                    excel_product_name="产品A",
+                    candidate_names=["产品A"],
+                    expected_metric_values={"mtd": "-0.0633"},
+                    expected_metric_status={"mtd": "extracted"},
+                    note="确认",
+                    is_active=True,
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+        deleted = client.post(
+            f"/updates/{run_id}/delete",
+            data={"token": _token(client, "/updates")},
+            follow_redirects=False,
+        )
+
+    assert deleted.status_code == 303
+    session = factory()
+    try:
+        sample = session.query(OcrRegressionSample).one()
+        assert sample.source_run_id is None
+        assert sample.source_item_id is None
+        assert Path(sample.image_path).exists()
+    finally:
+        session.close()
 
 
 def test_batch_requeue_moves_each_completed_run_back_to_the_queue(tmp_path: Path) -> None:
@@ -533,6 +583,309 @@ def test_quality_center_renders_metrics_and_review_links(tmp_path: Path) -> None
     assert "漏识别" in response.text
     assert "source_blank" not in response.text
     assert f'/updates/{run_id}/review?show_all=1#review-item-{item_id}' in response.text
+
+
+def test_quality_center_renders_regression_summary_and_admin_controls(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        session = factory()
+        try:
+            sample = OcrRegressionSample(
+                image_path=str(tmp_path / "ocr-quality" / "samples" / "sample.png"),
+                image_sha256="a" * 64,
+                source_run_id=run_id,
+                source_item_id=item_id,
+                source_label="管理员复核案例",
+                excel_product_name="浑瑾岳桐金选1号B",
+                candidate_names=["浑瑾岳桐金选1号B"],
+                expected_product_code="P001",
+                expected_metric_values={"mtd": "-0.0633"},
+                expected_metric_status={"mtd": "extracted"},
+                note="批次 #12",
+                is_active=True,
+            )
+            session.add(sample)
+            session.flush()
+            sample_id = sample.id
+            regression = OcrRegressionRun(
+                requested_by=1,
+                status="completed",
+                total_count=1,
+                passed_count=0,
+                failed_count=1,
+                finished_at=datetime(2026, 7, 21, 12, 0),
+            )
+            session.add(regression)
+            session.flush()
+            session.add(
+                OcrRegressionResult(
+                    run_id=regression.id,
+                    sample_id=sample.id,
+                    outcome="value_mismatch",
+                    expected={"metric_values": {"mtd": "-0.0633"}},
+                    actual={"metric_values": {"mtd": ""}},
+                    detail="数值不一致：MTD（%）",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        response = client.get("/quality")
+
+    assert response.status_code == 200
+    assert "回归验证" in response.text
+    assert "启用样本" in response.text
+    assert "运行回归验证" in response.text
+    assert "导入历史样本" in response.text
+    assert "提升已复核样本" in response.text
+    assert "浑瑾岳桐金选1号B" in response.text
+    assert "数值不一致：MTD（%）" in response.text
+    assert "-0.0633" in response.text
+    assert f"/quality/samples/{sample_id}/image" in response.text
+
+
+def test_quality_can_promote_a_review_sample_with_selected_source_image(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, _, _ = _create_run_with_artifacts(factory, tmp_path)
+        session = factory()
+        try:
+            admin = session.query(User).filter_by(username="admin").one()
+            product = Product(
+                product_name="浑瑾岳桐金选1号B",
+                product_code="P001",
+                product_type="private",
+            )
+            session.add(product)
+            session.flush()
+            item = session.get(RunItem, item_id)
+            assert item is not None
+            item.product_id = product.id
+            review_sample = OcrReviewSample(
+                run_id=run_id,
+                run_item_id=item_id,
+                actor_id=admin.id,
+                product_id=product.id,
+                excel_product_name="浑瑾岳桐金选1号B",
+                review_version=1,
+                ocr_match_source="image",
+                ocr_product_id=product.id,
+                ocr_metric_values={"mtd": "-0.05"},
+                ocr_metric_status={"mtd": "extracted"},
+                confirmed_metric_values={"mtd": "-0.0633"},
+                confirmed_metric_status={"mtd": "manual"},
+                review_note="批次 #12 复核",
+            )
+            session.add(review_sample)
+            session.flush()
+            image = session.query(RunFile).filter_by(run_id=run_id, file_type="image").one()
+            review_sample_id = review_sample.id
+            image_id = image.id
+            session.commit()
+        finally:
+            session.close()
+
+        response = client.post(
+            "/quality/samples/promote",
+            data={
+                "token": _token(client, "/quality"),
+                "review_sample_id": str(review_sample_id),
+                "source_file_id": str(image_id),
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    session = factory()
+    try:
+        promoted = session.query(OcrRegressionSample).one()
+        assert promoted.expected_metric_values == {"mtd": "-0.0633"}
+        assert promoted.source_item_id == item_id
+    finally:
+        session.close()
+
+
+def test_quality_sample_image_is_login_protected_and_confined_to_sample_root(
+    tmp_path: Path,
+) -> None:
+    app, factory = _test_app(tmp_path)
+    sample_path = tmp_path / "ocr-quality" / "samples" / "sample.png"
+    sample_path.parent.mkdir(parents=True)
+    sample_path.write_bytes(b"sample-image")
+    outside_path = tmp_path / "outside.png"
+    outside_path.write_bytes(b"outside")
+    session = factory()
+    try:
+        sample = OcrRegressionSample(
+            image_path=str(sample_path),
+            image_sha256="a" * 64,
+            source_label="测试",
+            excel_product_name="产品A",
+            note="测试",
+        )
+        outside = OcrRegressionSample(
+            image_path=str(outside_path),
+            image_sha256="b" * 64,
+            source_label="测试",
+            excel_product_name="产品B",
+            note="测试",
+        )
+        session.add_all([sample, outside])
+        session.commit()
+        sample_id = sample.id
+        outside_id = outside.id
+    finally:
+        session.close()
+
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        served = client.get(f"/quality/samples/{sample_id}/image")
+        outside = client.get(f"/quality/samples/{outside_id}/image")
+        client.post("/logout", data={"token": _token(client, "/quality")})
+        anonymous = client.get(f"/quality/samples/{sample_id}/image", follow_redirects=False)
+
+    assert served.status_code == 200
+    assert served.content == b"sample-image"
+    assert outside.status_code == 404
+    assert anonymous.status_code == 303
+
+
+def test_quality_regression_run_is_admin_only_and_queues_once(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        anonymous = client.post(
+            "/quality/regression/run",
+            data={"token": ""},
+            follow_redirects=False,
+        )
+        _login_as_admin(client)
+        queued = client.post(
+            "/quality/regression/run",
+            data={"token": _token(client, "/quality")},
+            follow_redirects=False,
+        )
+        duplicate = client.post(
+            "/quality/regression/run",
+            data={"token": _token(client, "/quality")},
+            follow_redirects=False,
+        )
+        imported = client.post(
+            "/quality/samples/import",
+            data={"token": _token(client, "/quality"), "run_id": "999"},
+            follow_redirects=False,
+        )
+        session = factory()
+        try:
+            operator = User(
+                username="operator",
+                password_hash=hash_password("operator-pass"),
+                role="user",
+            )
+            session.add(operator)
+            session.commit()
+        finally:
+            session.close()
+        client.post("/logout", data={"token": _token(client, "/quality")})
+        login_token = _token(client, "/login")
+        logged_in = client.post(
+            "/login",
+            data={
+                "username": "operator",
+                "password": "operator-pass",
+                "token": login_token,
+            },
+            follow_redirects=False,
+        )
+        forbidden = client.post(
+            "/quality/regression/run",
+            data={"token": _token(client, "/quality")},
+            follow_redirects=False,
+        )
+        forbidden_import = client.post(
+            "/quality/samples/import",
+            data={"token": _token(client, "/quality"), "run_id": "999"},
+            follow_redirects=False,
+        )
+        forbidden_promote = client.post(
+            "/quality/samples/promote",
+            data={
+                "token": _token(client, "/quality"),
+                "review_sample_id": "999",
+            },
+            follow_redirects=False,
+        )
+
+    assert anonymous.status_code == 303
+    assert queued.status_code == 303
+    assert duplicate.status_code == 303
+    assert imported.status_code == 303
+    assert logged_in.status_code == 303
+    assert forbidden.status_code == 403
+    assert forbidden_import.status_code == 403
+    assert forbidden_promote.status_code == 403
+    session = factory()
+    try:
+        assert session.query(OcrRegressionRun).count() == 1
+        assert session.query(OcrRegressionRun).one().status == "queued"
+    finally:
+        session.close()
+
+
+def test_review_evidence_is_login_protected_and_served_as_a_crop(tmp_path: Path) -> None:
+    app, factory = _test_app(tmp_path)
+    with TestClient(app) as client:
+        _login_as_admin(client)
+        run_id, item_id, run_dir, _ = _create_run_with_artifacts(factory, tmp_path)
+        image_path = run_dir / "source.png"
+        Image.new("RGB", (40, 40), "white").save(image_path)
+        session = factory()
+        try:
+            image = session.query(RunFile).filter_by(run_id=run_id, file_type="image").one()
+            item = session.get(RunItem, item_id)
+            assert item is not None
+            item.row_status = "stale"
+            item.metric_status = {"mtd": "source_blank"}
+            item.ocr_evidence = {
+                "source_file_id": image.id,
+                "metrics": {
+                    "mtd": {
+                        "passes": [
+                            {
+                                "pass": 2,
+                                "text": "-6.33",
+                                "confidence": 0.99,
+                                "box": [[10, 10], [30, 10], [30, 20], [10, 20]],
+                            }
+                        ],
+                        "selected_pass": 2,
+                    }
+                },
+            }
+            session.commit()
+        finally:
+            session.close()
+
+        review = client.get(f"/updates/{run_id}/review?show_all=1")
+        evidence = client.get(f"/updates/{run_id}/items/{item_id}/evidence/mtd")
+        invalid = client.get(f"/updates/{run_id}/items/{item_id}/evidence/ytd")
+        client.post("/logout", data={"token": _token(client, "/updates")})
+        anonymous = client.get(
+            f"/updates/{run_id}/items/{item_id}/evidence/mtd", follow_redirects=False
+        )
+
+    assert review.status_code == 200
+    assert "识别证据" in review.text
+    assert "-6.33" in review.text
+    assert "原图确认空值" in review.text
+    assert "需补录 11 项" in review.text
+    assert evidence.status_code == 200
+    assert evidence.headers["content-type"].startswith("image/png")
+    assert invalid.status_code == 404
+    assert anonymous.status_code == 303
 
 
 def test_private_product_monitoring_requires_login_renders_and_exports(tmp_path: Path) -> None:
